@@ -1,0 +1,7 @@
+.idea/
+__pycache__/
+*.dat
+logs/
+wandb/
+results/
+checkpoints/
