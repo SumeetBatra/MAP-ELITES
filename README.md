@@ -31,6 +31,11 @@ If you use this code in a scientific paper, please cite:
 
 **PGA-MAP-Elites**: Nilsson, Olle, and Antoine Cully. "Policy gradient assisted map-elites." Proceedings of the Genetic and Evolutionary Computation Conference. 2021.
 
+## Installation
+```
+conda env create -f map-elites.yaml
+conda activate map-elites
+```
 
 ## Basic usage
 
