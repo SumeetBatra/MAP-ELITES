@@ -29,7 +29,7 @@ def enjoy(policy_path, render=True, repeat=False):
     actor.load(policy_path)
 
     env = make_env()
-    while repeat:
+    while True:
         obs = env.reset()
         done = False
         try:
@@ -39,6 +39,8 @@ def enjoy(policy_path, render=True, repeat=False):
                 with torch.no_grad():
                     action = actor(obs).detach().cpu().numpy()
                 obs, rew, done, info = env.step(action)
+            if not repeat:
+                break
         except KeyboardInterrupt:
             break
     env.close()
