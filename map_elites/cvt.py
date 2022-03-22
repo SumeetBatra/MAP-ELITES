@@ -99,6 +99,8 @@ def compute_nn(cfg,
     """
 
     num_gpus = cfg['num_gpus']
+    evals_per_gpu = 5  # number of parallel evaluations per gpu
+    num_parallel_evals = int(evals_per_gpu * num_gpus)
     # create the CVT
     cluster_centers = cm.cvt(n_niches, cfg['dim_map'],
                              cfg['cvt_samples'], cfg['cvt_use_cache'])
@@ -120,7 +122,7 @@ def compute_nn(cfg,
             # random initialization
             if len(archive) <= cfg['random_init']:  # initialize a |random_init| number of actors
                 log.debug("Initializing the neural network actors' weights from scratch")
-                for i in range(0, cfg['random_init_batch'] + 1):
+                for i in range(0, cfg['random_init_batch']):
                     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
                     actor = model_factory(hidden_size=128, device=device).to(device)
                     log.debug(f'New actor going to gpu {gpu_id}')
@@ -134,7 +136,7 @@ def compute_nn(cfg,
             log.debug(f"Evaluating {len(to_evaluate)} policies")
 
             # evaluations of the fitness and BD of new batch
-            solutions = envs.eval_policy(to_evaluate)
+            solutions = envs.batch_eval_policies(to_evaluate)
             frames = sum(sol[1] for sol in solutions)
             steps += frames
 

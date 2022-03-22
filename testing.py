@@ -4,6 +4,7 @@ import time
 import pandas as pd
 from models.bipedal_walker_model import BipedalWalkerNN
 from enjoy_bipedal_walker import enjoy
+from faster_fifo import Queue
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -20,17 +21,23 @@ sigma = np.ones(1000)
 # 701314 - walking
 
 if __name__ == '__main__':
-    filepath = './checkpoints/checkpoint_000760022/archive_CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_760022.dat'
-    df = pd.read_csv(filepath, sep=' ')
-    df = df.to_numpy()[:, :-1]
-    elites = np.where(df[:, 0] >= 200)
-    df_elites = df[elites]
-    df_elites_sorted = np.array(sorted(df_elites, key=lambda x: x[0], reverse=True))
-    print(df_elites_sorted[:, [0, 3, 4, 5]])
-    inds = list(range(df_elites_sorted.shape[0]))
-    np.random.shuffle(inds)
-    rand_policies = df_elites_sorted[inds][:,-1]
-    for policy_id in rand_policies[:10]:
-        print(f'Running policy {int(policy_id)}')
-        policy_path = f'checkpoints/checkpoint_000760022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
-        enjoy(policy_path)
+    # filepath = './checkpoints/checkpoint_002790022/archive_CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_2790022.dat'
+    # df = pd.read_csv(filepath, sep=' ')
+    # df = df.to_numpy()[:, :-1]
+    # elites = np.where(df[:, 0] >= 240)
+    # df_elites = df[elites]
+    # df_elites_sorted = np.array(sorted(df_elites, key=lambda x: x[0], reverse=True))
+    # print(df_elites_sorted[:, [0, 3, 4, 5]])
+    # inds = list(range(df_elites_sorted.shape[0]))
+    # np.random.shuffle(inds)
+    # rand_policies = df_elites_sorted[inds][:,-1]
+    # for policy_id in rand_policies[:10]:
+    #     print(f'Running policy {int(policy_id)}')
+    #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
+    #     enjoy(policy_path, render=True)
+    q = Queue()
+    q.get_ma
+    a = np.ones((10, 5))
+    b = np.ones((10, 5)) * 2
+    for idx, (i, j) in enumerate(zip(a, b)):
+        print(idx, i, j)

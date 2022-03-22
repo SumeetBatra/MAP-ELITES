@@ -47,6 +47,8 @@ def parse_args(argv=None):
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
     parser.add_argument('--cp_save_period', default=5000, type=int, help='How many evaluations b/w saving checkpoints')
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
+    parser.add_argument('--workers_per_gpu', default=5, type=int, help='How many policy evaluators to run in parallel per gpu (different from number of policies to create a BatchMLP)')
+    parser.add_argument('--actors_batch_size', default=10, type=int, help='Number of policies used to create a BatchMLP')
 
     # args for cross over and mutation of agent params
     parser.add_argument('--mutation_op', default=None, type=str, choices=['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation'], help='Type of mutation to perform. Leave as None to do no mutations')
@@ -100,12 +102,16 @@ def main():
     cfg['num_workers'] = num_workers  # for printing the cfg vars  
 
     # set up factory function to launch parallel environments
-    env_fns = [partial(make_env) for _ in range(num_workers)]
+    assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
+           cfg['random_init_batch'] % cfg['actors_batch_size'] == 0, 'number of policies to evaluate during the init/eval phase must be a multiple of actors_batch_size'
+    env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'])]
     envs = ParallelEnv(
         env_fns,
         cfg['batch_size'],
-        cfg['random_init'],
-        cfg['seed']
+        cfg['seed'],
+        cfg['workers_per_gpu'],
+        cfg['actors_batch_size'],
+        cfg['num_gpus']
     )
     # make folders
     if not os.path.exists(cfg['save_path']):
