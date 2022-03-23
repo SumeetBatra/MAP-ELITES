@@ -12,9 +12,36 @@ Modified by Olle Nilsson: olle.nilsson19@imperial.ac.uk
 import copy
 import numpy as np
 import torch
+import time
 from faster_fifo import Queue
 from utils.logger import log
 from models.bipedal_walker_model import BipedalWalkerNN
+from multiprocessing import Pipe, Process, Event
+from functools import partial
+from pynvml import *
+from utils.utils import get_least_busy_gpu
+
+
+def parallel_variation_worker(process_id,
+                              var_in_queue,
+                              var_out_queue,
+                              close_processes,
+                              remote):
+    nvmlInit()
+    while True:
+        try:
+            # try to mutate/crossover a batch of policies
+            try:
+                pass
+            except BaseException:
+                pass
+            if close_processes.set():
+                log.debug(f'Close Variation Worker Process ID {process_id}')
+                remote.send(process_id)
+                time.sleep(5)
+                break
+        except KeyboardInterrupt:
+            break
 
 
 class VariationOperator(object):
@@ -22,7 +49,8 @@ class VariationOperator(object):
     A class for applying the variation operator in parallel.
     """
     def __init__(self,
-                 num_cpu = False,
+                 num_cpu = 1,
+                 num_gpu = 1,
                  crossover_op = 'iso_dd',
                  mutation_op = None,
                  max_gene = False,
@@ -62,9 +90,19 @@ class VariationOperator(object):
         self.line_sigma = line_sigma
 
         self.n_processes = num_cpu
-        # TODO: don't think these two queues are needed anymore, so get rid of them
-        self.actors_train_in_queue = Queue()
-        self.actors_train_out_queue = Queue()
+        self.num_gpu = num_gpu
+        self.var_in_queue = Queue()
+        self.var_out_queue = Queue()
+        self.remotes, self.locals = zip(*[Pipe() for _ in range(self.n_processes + 1)])
+        self.close_processes = Event()
+
+        self.processes = [Process(target=parallel_variation_worker,
+                                  args=(process_id,
+                                  self.var_in_queue,
+                                  self.var_out_queue,
+                                  self.close_processes,
+                                  self.remotes[process_id])) for process_id in range(self.n_processes)]
+
 
     def __call__(self, archive, batch_size, proportion_evo):
         '''
@@ -99,6 +137,15 @@ class VariationOperator(object):
                 actors_x_evo += [archive[keys[rand_evo_1[n]]]]
                 actors_y_evo += [archive[keys[rand_evo_2[n]]]]
 
+        num_evos = int(batch_size * proportion_evo)
+        num_evos_per_worker = num_evos // self.n_processes
+        if self.crossover_op and self.mutation_op:
+            evo_fn = partial(self.evo, actors_x_evo[n].genotype, actors_y_evo[n].genotype, self.crossover_op, self.mutation_op)
+        elif self.crossover_op and not self.mutation_op:
+            pass
+
+
+
         # apply GA variation
         for n in range(len(actors_x_evo)):
             if self.crossover_op:
@@ -110,6 +157,60 @@ class VariationOperator(object):
                 actors_z += [self.evo(actors_x_evo[n].genotype, False, False, self.mutation_op)]
 
         return actors_z
+
+    def batch_evo(self, actors_x, actors_y=None, crossover_op=None, mutation_op=None):
+        '''
+        evolve the agent parameters (in this case, a neural network) using crossover and mutation operators
+        crossover needs 2 parents, thus actor_x and actor_y
+        mutation can just be performed on actor_x to get actor_z (child)
+        '''
+        actors_z = [copy.deepcopy(actor_x) for actor_x in actors_x]
+        actor_z_state_dicts = [actor_z.state_dict for actor_z in actors_z]
+        for actor_z in actors_z:
+            actor_z.type = 'evo'
+
+        if crossover_op:
+            pass
+
+    def batch_crossover(self, x_state_dicts, y_state_dicts, crossover_op):
+        """
+        perform crossover operation b/w two parents (actor x and actor y) to produce child (actor z) for a batch of parents
+        """
+        z_state_dicts = [copy.deepcopy(x_state_dict) for x_state_dict in x_state_dicts]
+        pass
+
+    def batch_iso_dd(self, x, y):
+        '''
+        Iso+Line
+        Ref:
+        Vassiliades V, Mouret JB. Discovering the elite hypervolume by leveraging interspecies correlation.
+        GECCO 2018
+        Support for batch processing
+        '''
+        gpu_id = get_least_busy_gpu(self.num_gpu)
+        device = torch.device(f'cuda:{gpu_id}')
+        with torch.no_grad():
+            a = torch.zeros_like(x).normal_(mean=0, std=self.iso_sigma)
+            b = np.random.normal(0, self.line_sigma)
+            z = x.clone() + a + b * (y - x)
+
+        if not self.max and not self.min:
+            return z
+        else:
+            with torch.no_grad():
+                return torch.clamp(z, self.min, self.max)
+
+    def batch_gaussian_mutation(self, x):
+        """
+        Mutate the params of the agents x according to a gaussian
+        """
+        with torch.no_grad():
+            y = x.clone()
+            m = torch.rand_like(y)
+            index = torch.where(m < self.mutation_rate)
+            delta = torch.zeros(index[0].shape).normal_(mean=0, std=self.sigma).to()
+
+
 
     def evo(self, actor_x, actor_y=None, crossover_op=None, mutation_op=None):
         '''
@@ -149,6 +250,10 @@ class VariationOperator(object):
             if 'weight' or 'bias' in tensor:
                 y[tensor] = mutation_op(actor_x_state_dict[tensor])
         return y
+
+    ################################
+    # Crossover Operators ###########
+    ################################
 
     def iso_dd(self, x, y):
         '''

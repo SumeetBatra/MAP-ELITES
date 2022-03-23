@@ -5,6 +5,7 @@ import pandas as pd
 from models.bipedal_walker_model import BipedalWalkerNN
 from enjoy_bipedal_walker import enjoy
 from faster_fifo import Queue
+from functools import partial
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,9 +36,8 @@ if __name__ == '__main__':
     #     print(f'Running policy {int(policy_id)}')
     #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
     #     enjoy(policy_path, render=True)
-    q = Queue()
-    q.get_ma
-    a = np.ones((10, 5))
-    b = np.ones((10, 5)) * 2
-    for idx, (i, j) in enumerate(zip(a, b)):
-        print(idx, i, j)
+    def func(a, b):
+        return a + b
+
+    f = partial(func, 1, 2)
+    pass

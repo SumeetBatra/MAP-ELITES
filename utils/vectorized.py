@@ -14,63 +14,7 @@ from utils.utils import get_least_busy_gpu
 from pynvml import *
 
 
-
-
-# # adapted from: https://github.com/ollenilsson19/PGA-MAP-Elites/blob/master/vectorized_env.py
-# def parallel_worker(process_id,
-#                     env_fn_wrapper,
-#                     eval_in_queue,
-#                     eval_out_queue,
-#                     trans_out_queue,
-#                     close_processes,
-#                     remote,
-#                     master_seed):
-#     '''
-#     Function that runs the paralell processes for the evaluation
-#     Parameters:
-#         process_id (int): ID of the process so it can be identified
-#         env_fn_wrapper : function that when called starts a new environment
-#         eval_in_queue (Queue object): queue for incoming actors
-#         eval_out_queue (Queue object): queue for outgoing actors
-#         trans_out_queue (Queue object): queue for outgoing transitions
-#     '''
-#     # start env simulation
-#     env = env_fn_wrapper.x()
-#     # begin process loop
-#     while True:
-#         try:
-#             # get a new actor to evaluate
-#             try:
-#                 idx, actor, eval_id, eval_mode = eval_in_queue.get_nowait()
-#                 env.seed(int((master_seed + 100) * eval_id))
-#                 obs = env.reset()
-#                 done = False
-#                 # eval loop
-#                 obs_arr, rew_arr, dones_arr = [], [], []
-#                 rewards, info = 0, None
-#                 while not done:
-#                     with torch.no_grad():
-#                         obs = torch.from_numpy(obs).to(actor.device)
-#                         action = actor(obs).cpu().detach().numpy()
-#                         obs, rew, done, info = env.step(action)
-#                         obs_arr.append(obs)
-#                         rew_arr.append(rew)
-#                         dones_arr.append(done)
-#                         rewards += rew
-#                 eval_out_queue.put((idx, (rewards, env.ep_length, info['desc'])))
-#             except BaseException:
-#                 pass
-#             if close_processes.is_set():
-#                 log.debug(f'Close Eval Process id {process_id}')
-#                 remote.send(process_id)  # TODO: add rng state??
-#                 env.close()
-#                 time.sleep(5)
-#                 break
-#
-#         except KeyboardInterrupt:
-#             env.close()
-#             break
-
+# adapted from: https://github.com/ollenilsson19/PGA-MAP-Elites/blob/master/vectorized_env.py
 def parallel_worker(process_id,
                  env_fn_wrappers,
                  eval_in_queue,
@@ -97,7 +41,6 @@ def parallel_worker(process_id,
                 for env in envs:
                     env.seed(int((master_seed * 100) * eval_id))
                 obs = torch.tensor([env.reset() for env in envs]).reshape(num_actors, -1).to(actors[0].device)
-                done = False
                 rews = [0 for _ in range(num_actors)]
                 dones = [False for _ in range(num_actors)]
                 infos = [None for _ in range(num_actors)]
@@ -119,7 +62,7 @@ def parallel_worker(process_id,
             except BaseException:
                 pass
             if close_processes.is_set():
-                log.debug(f'Close Eval Process id {process_id}')
+                log.debug(f'Close Evaluation Worker Process ID {process_id}')
                 remote.send(process_id)  # TODO: add rng state??
                 env.close()
                 time.sleep(5)

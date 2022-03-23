@@ -46,9 +46,12 @@ def parse_args(argv=None):
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
     parser.add_argument('--cp_save_period', default=5000, type=int, help='How many evaluations b/w saving checkpoints')
+
+    # args for parallelization
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
     parser.add_argument('--workers_per_gpu', default=5, type=int, help='How many policy evaluators to run in parallel per gpu (different from number of policies to create a BatchMLP)')
     parser.add_argument('--actors_batch_size', default=10, type=int, help='Number of policies used to create a BatchMLP')
+    parser.add_argument('--num_variation_workers', default=-1, type=int, help='Number of parallel processes performing crossover/mutation')
 
     # args for cross over and mutation of agent params
     parser.add_argument('--mutation_op', default=None, type=str, choices=['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation'], help='Type of mutation to perform. Leave as None to do no mutations')
@@ -99,7 +102,11 @@ def main():
     num_workers = cfg['num_workers']
     if num_workers == -1: num_workers = num_cores
     assert num_workers <= num_cores, '--num_workers must be less than or equal to the number of cores on your machine. Multiple workers per cpu are currently not supported'
-    cfg['num_workers'] = num_workers  # for printing the cfg vars  
+    cfg['num_workers'] = num_workers  # for printing the cfg vars
+
+    # same thing with variation workers
+    num_var_workers = cfg['num_variation_workers']
+    if num_var_workers == -1: cfg['num_variation_workers'] = num_cores
 
     # set up factory function to launch parallel environments
     assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
@@ -133,7 +140,8 @@ def main():
     np.random.seed(cfg['seed'])
 
     # initialize the variation operator (that performs crossovers/mutations)
-    variation_op = VariationOperator(num_cpu=num_workers,
+    variation_op = VariationOperator(num_cpu=num_var_workers,
+                                     num_gpu=cfg['num_gpus'],
                                      crossover_op=cfg['crossover_op'],
                                      mutation_op=cfg['mutation_op'],
                                      max_gene=cfg['max_genotype'],

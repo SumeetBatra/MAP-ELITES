@@ -26,7 +26,7 @@ def cfg_dict(cfg):
         return vars(cfg)
 
 
-def     save_cfg(cfg, save_path):
+def save_cfg(cfg, save_path):
     cfg = cfg_dict(cfg)
     cfg_file = os.path.join(save_path, 'cfg.json')
     with open(cfg_file, 'w') as json_file:
