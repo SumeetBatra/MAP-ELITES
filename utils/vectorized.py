@@ -205,14 +205,25 @@ class BatchMLP(nn.Module):
         for i in range(0, num_layers):
             if not isinstance(self.mlps[0].layers[i], nn.Linear):
                 continue
-            slice_weights = [self.mlps[j].layers[i].weight.to(self.device) for j in range(self.num_mlps)]
-            slice_bias = [self.mlps[j].layers[i].bias.to(self.device) for j in range(self.num_mlps)]
+            slice_weights = [self.mlps[j].layers[i].weight.clone().to(self.device) for j in range(self.num_mlps)]
+            slice_bias = [self.mlps[j].layers[i].bias.clone().to(self.device) for j in range(self.num_mlps)]
             slice_weights = torch.stack(slice_weights)
             slice_bias = torch.stack(slice_bias)
             nonlinear = self.mlps[0].layers[i+1] if i+1 < num_layers else None
             block = BatchLinearBlock(slice_weights, nonlinear, slice_bias)
             blocks.append(block)
         return blocks
+
+    def update_mlps(self):
+        '''
+        The batch mlp blocks may have been updated from backprop or mutation/crossover.
+        This method updates the weights of the original mlps that produced the batch blocks
+        '''
+        for i, layer in enumerate(self.layers):
+            for j in range(len(self.mlps)):
+                # 2 * i b/c every other layer is an activation
+                self.mlps[j].layers[2 * i].weight.data = layer.weights[i].clone()
+                self.mlps[j].layers[2 * i].bias.data = layer.biases[i].clone()
 
 
 class CloudpickleWrapper(object):
