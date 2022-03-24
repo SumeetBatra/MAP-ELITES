@@ -92,7 +92,9 @@ def main():
     args = parse_args()
     cfg = vars(args)
 
-    nvmlInit()  # for tracking gpu resources
+    num_gpus = cfg['num_gpus']
+    if num_gpus:
+        nvmlInit()  # for tracking gpu resources
 
     # log hyperparams to wandb
     config_wandb(batch_size=cfg['batch_size'], max_evals=cfg['max_evals'])
@@ -106,7 +108,9 @@ def main():
 
     # same thing with variation workers
     num_var_workers = cfg['num_variation_workers']
-    if num_var_workers == -1: cfg['num_variation_workers'] = num_cores
+    if num_var_workers == -1:
+        cfg['num_variation_workers'] = num_cores
+        num_var_workers = num_cores
 
     # set up factory function to launch parallel environments
     assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \

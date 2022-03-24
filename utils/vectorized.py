@@ -24,8 +24,8 @@ def parallel_worker(process_id,
                  remote,
                  master_seed,
                  num_gpus):
-
-    nvmlInit()  # for tracking gpu available resources
+    if num_gpus:
+        nvmlInit()  # for tracking gpu available resources
     # start the simulations
     envs = [env_fn_wrappers.x[i]() for i in range(len(env_fn_wrappers.x))]
     # begin the process loop
@@ -35,8 +35,10 @@ def parallel_worker(process_id,
             try:
                 idx, actors, eval_id, eval_mode = eval_in_queue.get_nowait()
                 assert len(envs) % len(actors) == 0, 'Number of envs should be a multiple of the number of policies '
-                gpu_id = get_least_busy_gpu(num_gpus)
-                batch_actors = BatchMLP(actors, device=torch.device(f'cuda:{gpu_id}'))
+                if num_gpus:
+                    gpu_id = get_least_busy_gpu(num_gpus)
+                device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else "cpu")
+                batch_actors = BatchMLP(actors, device=device)
                 num_actors = len(actors)
                 for env in envs:
                     env.seed(int((master_seed * 100) * eval_id))

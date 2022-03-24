@@ -125,9 +125,10 @@ def compute_nn(cfg,
                 for i in range(0, cfg['random_init_batch']):
                     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
                     actor = model_factory(hidden_size=128, device=device).to(device)
-                    log.debug(f'New actor going to gpu {gpu_id}')
                     to_evaluate += [actor]
-                    gpu_id = (gpu_id + 1) % num_gpus
+                    if cfg['num_gpus']:
+                        log.debug(f'New actor going to gpu {gpu_id}')
+                        gpu_id = (gpu_id + 1) % num_gpus
             else:  # variation/selection loop
                 log.debug("Selection/Variation loop of existing actors")
                 # copy and add variation

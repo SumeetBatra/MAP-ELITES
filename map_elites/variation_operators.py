@@ -26,8 +26,10 @@ def parallel_variation_worker(process_id,
                               var_in_queue,
                               var_out_queue,
                               close_processes,
-                              remote):
-    nvmlInit()
+                              remote,
+                              num_gpus):
+    if num_gpus:
+        nvmlInit()
     while True:
         try:
             # try to mutate/crossover a batch of policies
@@ -101,7 +103,8 @@ class VariationOperator(object):
                                   self.var_in_queue,
                                   self.var_out_queue,
                                   self.close_processes,
-                                  self.remotes[process_id])) for process_id in range(self.n_processes)]
+                                  self.remotes[process_id],
+                                  self.num_gpu)) for process_id in range(self.n_processes)]
 
 
     def __call__(self, archive, batch_size, proportion_evo):
@@ -137,12 +140,12 @@ class VariationOperator(object):
                 actors_x_evo += [archive[keys[rand_evo_1[n]]]]
                 actors_y_evo += [archive[keys[rand_evo_2[n]]]]
 
-        num_evos = int(batch_size * proportion_evo)
-        num_evos_per_worker = num_evos // self.n_processes
-        if self.crossover_op and self.mutation_op:
-            evo_fn = partial(self.evo, actors_x_evo[n].genotype, actors_y_evo[n].genotype, self.crossover_op, self.mutation_op)
-        elif self.crossover_op and not self.mutation_op:
-            pass
+        # num_evos = int(batch_size * proportion_evo)
+        # num_evos_per_worker = num_evos // self.n_processes
+        # if self.crossover_op and self.mutation_op:
+        #     evo_fn = partial(self.evo, actors_x_evo[n].genotype, actors_y_evo[n].genotype, self.crossover_op, self.mutation_op)
+        # elif self.crossover_op and not self.mutation_op:
+        #     pass
 
 
 
