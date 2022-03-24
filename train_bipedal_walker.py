@@ -54,7 +54,7 @@ def parse_args(argv=None):
     parser.add_argument('--num_variation_workers', default=-1, type=int, help='Number of parallel processes performing crossover/mutation')
 
     # args for cross over and mutation of agent params
-    parser.add_argument('--mutation_op', default=None, type=str, choices=['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation'], help='Type of mutation to perform. Leave as None to do no mutations')
+    parser.add_argument('--mutation_op', default=None, type=str, choices=['polynomial_mutation', 'batch_gaussian_mutation', 'uniform_mutation'], help='Type of mutation to perform. Leave as None to do no mutations')
     parser.add_argument('--crossover_op', default='iso_dd', type=str, choices=['sbx', 'iso_dd'], help='Type of crossover operation to perform')
     parser.add_argument("--min_genotype", default=False, type=float, help='Minimum value a gene in the genotype can take (if False no limit) (Set to False in GECCO paper)')
     parser.add_argument("--max_genotype", default=False, type=float, help='Maximum value a gene in the genotype can take (if False no limit) (Set to False in GECCO paper)')

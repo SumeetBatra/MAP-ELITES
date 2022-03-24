@@ -226,6 +226,7 @@ class BatchMLP(nn.Module):
                 # 2 * i b/c every other layer is an activation
                 self.mlps[j].layers[2 * i].weight.data = layer.weights[i].clone()
                 self.mlps[j].layers[2 * i].bias.data = layer.biases[i].clone()
+        return self.mlps
 
 
 class CloudpickleWrapper(object):

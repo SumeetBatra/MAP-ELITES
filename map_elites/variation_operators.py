@@ -17,9 +17,11 @@ from faster_fifo import Queue
 from utils.logger import log
 from models.bipedal_walker_model import BipedalWalkerNN
 from multiprocessing import Pipe, Process, Event
+from torch.multiprocessing import Process as TorchProcess
 from functools import partial
 from pynvml import *
 from utils.utils import get_least_busy_gpu
+from utils.vectorized import BatchMLP
 
 
 def parallel_variation_worker(process_id,
@@ -44,6 +46,140 @@ def parallel_variation_worker(process_id,
                 break
         except KeyboardInterrupt:
             break
+
+
+class VariationWorker(object):
+    def __init__(self, process_id, var_in_queue, var_out_queue, close_processes, remote, num_gpus):
+        self.pid = process_id
+        self.var_in_queue = var_in_queue
+        self.var_out_queue = var_out_queue
+        self.close_processes = close_processes
+        self.remote = remote
+        self.num_gpus = num_gpus
+        self.terminate = False
+
+        if num_gpus:
+            nvmlInit()
+
+        self.process = TorchProcess(target=self._run, daemon=True)
+        self.process.start()
+
+    def _run(self):
+        with torch.no_grad():
+            while not self.terminate:
+                try:
+                    # try to mutate/crossover a batch of policies
+                    actors_x, actors_y, crossover_op, mutation_op = self.var_in_queue.get_nowait()
+                    try:
+                        pass
+                    except BaseException:
+                        pass
+                    if self.close_processes.set():
+                        log.debug(f'Close Variation Worker Process ID {self.pid}')
+                        self.remote.send(self.pid)
+                        time.sleep(5)
+                        break
+                except KeyboardInterrupt:
+                    break
+
+    def batch_evo(self, actors_x, actors_y=None, crossover_op=None, mutation_op=None):
+        '''
+        evolve the agent parameters (in this case, a neural network) using crossover and mutation operators
+        crossover needs 2 parents, thus actor_x and actor_y
+        mutation can just be performed on actor_x to get actor_z (child)
+        '''
+        if self.num_gpus:
+            gpu_id = get_least_busy_gpu(self.num_gpus)
+        device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
+
+        batch_actors_x = BatchMLP(actors_x, device)
+        batch_actors_y = BatchMLP(actors_y, device)
+
+        actors_z = [copy.deepcopy(actor_x) for actor_x in actors_x]
+        batch_actors_z = BatchMLP(actors_z, device)
+        actors_z_state_dict = batch_actors_z.state_dict()
+        for actor_z in actors_z:
+            actor_z.type = 'evo'
+
+        if crossover_op:
+            for x, y, z in zip(actors_x, actors_y, actors_z):
+                z.parent_1_id = x.id
+                z.parent_2_id = y.id
+            actors_z_state_dict = self.batch_crossover(batch_actors_x.state_dict(), batch_actors_y.state_dict(), crossover_op, device)
+            if mutation_op:
+                actors_z_state_dict = self.batch_mutation(actors_z_state_dict, mutation_op, device)
+            elif mutation_op:
+                for actor_x, actor_z in zip(actors_x, actors_z):
+                    actor_z.parent_1_id = actor_x.id
+                    actor_z.parent_2_id = None
+                actors_z_state_dict = self.batch_mutation(actors_z_state_dict, mutation_op, device)
+        batch_actors_z.load_state_dict(actors_z_state_dict)
+        actors_z = batch_actors_z.update_mlps()
+        self.var_out_queue.put_many(actors_z, block=True, timeout=1e9)
+
+    def batch_crossover(self, batch_x_state_dict, batch_y_state_dict, crossover_op, device):
+        """
+        perform crossover operation b/w two parents (actor x and actor y) to produce child (actor z) for a batch of parents
+        :return: a BatchMLP object containing all the actors_z resulting from the crossover of x/y actors
+        """
+        batch_z_state_dict = copy.deepcopy(batch_x_state_dict)
+        for tensor in batch_x_state_dict:
+            if 'weight' or 'bias' in tensor:
+                batch_z_state_dict[tensor] = crossover_op(batch_x_state_dict[tensor], batch_y_state_dict[tensor]).to(device)
+        return batch_z_state_dict
+
+
+    def batch_mutation(self, batch_x_state_dict, mutation_op, device):
+        y = copy.deepcopy(batch_x_state_dict)
+        for tensor in batch_x_state_dict:
+            if 'weight' or 'bias' in tensor:
+                y[tensor] = mutation_op(batch_x_state_dict[tensor])
+        return y
+
+    def batch_iso_dd(self, x, y):
+        '''
+        Iso+Line
+        Ref:
+        Vassiliades V, Mouret JB. Discovering the elite hypervolume by leveraging interspecies correlation.
+        GECCO 2018
+        Support for batch processing
+        '''
+        with torch.no_grad():
+            a = torch.zeros_like(x).normal_(mean=0, std=self.iso_sigma)
+            b = np.random.normal(0, self.line_sigma)
+            z = x.clone() + a + b * (y - x)
+
+        if not self.max and not self.min:
+            return z
+        else:
+            with torch.no_grad():
+                return torch.clamp(z, self.min, self.max)
+
+
+    ################################
+    # Mutation Operators ###########
+    ################################
+
+    def batch_gaussian_mutation(self, x):
+        """
+        Mutate the params of the agents x according to a gaussian
+        """
+        with torch.no_grad():
+            y = x.clone()
+            m = torch.rand_like(y)
+            index = torch.where(m < self.mutation_rate)
+            delta = torch.zeros(index[0].shape).normal_(mean=0, std=self.sigma).to(y.device)
+            if len(y.shape) == 1:
+                y[index[0]] += delta
+            elif len(y.shape) == 2:
+                y[index[0], index[1]] += delta
+            else:
+                # 3D i.e. BatchMLP
+                y[index[0], index[1], index[2]] += delta
+            if not self.max and not self.min:
+                return y
+            else:
+                return torch.clamp(y, self.min, self.max)
 
 
 class VariationOperator(object):
@@ -98,8 +234,9 @@ class VariationOperator(object):
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.n_processes + 1)])
         self.close_processes = Event()
 
-        self.processes = [Process(target=parallel_variation_worker,
+        self.processes = [TorchProcess(target=parallel_variation_worker,
                                   args=(process_id,
+                                  self.batch_evo,
                                   self.var_in_queue,
                                   self.var_out_queue,
                                   self.close_processes,
@@ -160,59 +297,6 @@ class VariationOperator(object):
                 actors_z += [self.evo(actors_x_evo[n].genotype, False, False, self.mutation_op)]
 
         return actors_z
-
-    def batch_evo(self, actors_x, actors_y=None, crossover_op=None, mutation_op=None):
-        '''
-        evolve the agent parameters (in this case, a neural network) using crossover and mutation operators
-        crossover needs 2 parents, thus actor_x and actor_y
-        mutation can just be performed on actor_x to get actor_z (child)
-        '''
-        actors_z = [copy.deepcopy(actor_x) for actor_x in actors_x]
-        actor_z_state_dicts = [actor_z.state_dict for actor_z in actors_z]
-        for actor_z in actors_z:
-            actor_z.type = 'evo'
-
-        if crossover_op:
-            pass
-
-    def batch_crossover(self, x_state_dicts, y_state_dicts, crossover_op):
-        """
-        perform crossover operation b/w two parents (actor x and actor y) to produce child (actor z) for a batch of parents
-        """
-        z_state_dicts = [copy.deepcopy(x_state_dict) for x_state_dict in x_state_dicts]
-        pass
-
-    def batch_iso_dd(self, x, y):
-        '''
-        Iso+Line
-        Ref:
-        Vassiliades V, Mouret JB. Discovering the elite hypervolume by leveraging interspecies correlation.
-        GECCO 2018
-        Support for batch processing
-        '''
-        gpu_id = get_least_busy_gpu(self.num_gpu)
-        device = torch.device(f'cuda:{gpu_id}')
-        with torch.no_grad():
-            a = torch.zeros_like(x).normal_(mean=0, std=self.iso_sigma)
-            b = np.random.normal(0, self.line_sigma)
-            z = x.clone() + a + b * (y - x)
-
-        if not self.max and not self.min:
-            return z
-        else:
-            with torch.no_grad():
-                return torch.clamp(z, self.min, self.max)
-
-    def batch_gaussian_mutation(self, x):
-        """
-        Mutate the params of the agents x according to a gaussian
-        """
-        with torch.no_grad():
-            y = x.clone()
-            m = torch.rand_like(y)
-            index = torch.where(m < self.mutation_rate)
-            delta = torch.zeros(index[0].shape).normal_(mean=0, std=self.sigma).to()
-
 
 
     def evo(self, actor_x, actor_y=None, crossover_op=None, mutation_op=None):
