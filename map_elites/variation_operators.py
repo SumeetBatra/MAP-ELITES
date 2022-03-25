@@ -16,8 +16,7 @@ import time
 from faster_fifo import Queue
 from utils.logger import log
 from models.bipedal_walker_model import BipedalWalkerNN
-from multiprocessing import Pipe, Process, Event
-from torch.multiprocessing import Process as TorchProcess
+from torch.multiprocessing import Process as TorchProcess, Pipe, Event
 from functools import partial
 from pynvml import *
 from utils.utils import get_least_busy_gpu
@@ -49,7 +48,7 @@ def parallel_variation_worker(process_id,
 
 
 class VariationWorker(object):
-    def __init__(self, process_id, var_in_queue, var_out_queue, close_processes, remote, num_gpus):
+    def __init__(self, process_id, var_in_queue, var_out_queue, close_processes, remote, num_gpus, evo_cfg):
         self.pid = process_id
         self.var_in_queue = var_in_queue
         self.var_out_queue = var_out_queue
@@ -57,6 +56,7 @@ class VariationWorker(object):
         self.remote = remote
         self.num_gpus = num_gpus
         self.terminate = False
+        self.evo_cfg = evo_cfg  # hyperparameters for evolution
 
         if num_gpus:
             nvmlInit()
@@ -68,10 +68,11 @@ class VariationWorker(object):
         with torch.no_grad():
             while not self.terminate:
                 try:
-                    # try to mutate/crossover a batch of policies
-                    actors_x, actors_y, crossover_op, mutation_op = self.var_in_queue.get_nowait()
                     try:
-                        pass
+                        # try to mutate/crossover a batch of policies
+                        actors_x, actors_y, crossover_op, mutation_op = self.var_in_queue.get_nowait()
+                        actors_z = self.batch_evo(actors_x, actors_y, crossover_op, mutation_op)
+                        self.var_out_queue.put_many(actors_z, block=True, timeout=1e9)
                     except BaseException:
                         pass
                     if self.close_processes.set():
@@ -115,7 +116,7 @@ class VariationWorker(object):
                 actors_z_state_dict = self.batch_mutation(actors_z_state_dict, mutation_op, device)
         batch_actors_z.load_state_dict(actors_z_state_dict)
         actors_z = batch_actors_z.update_mlps()
-        self.var_out_queue.put_many(actors_z, block=True, timeout=1e9)
+        return actors_z
 
     def batch_crossover(self, batch_x_state_dict, batch_y_state_dict, crossover_op, device):
         """
@@ -226,6 +227,9 @@ class VariationOperator(object):
         self.max_uniform = max_uniform
         self.iso_sigma = iso_sigma
         self.line_sigma = line_sigma
+        self.evo_cfg = {'min': min_gene, 'max': max_gene, 'mutation_rate': mutation_rate, 'crossover_rate': crossover_rate,
+                        'eta_m': eta_m, 'eta_c': eta_c, 'sigma': sigma, 'max_uniform': max_uniform, 'iso_sigma': iso_sigma,
+                        'line_sigma': line_sigma}
 
         self.n_processes = num_cpu
         self.num_gpu = num_gpu
@@ -234,14 +238,43 @@ class VariationOperator(object):
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.n_processes + 1)])
         self.close_processes = Event()
 
-        self.processes = [TorchProcess(target=parallel_variation_worker,
-                                  args=(process_id,
-                                  self.batch_evo,
-                                  self.var_in_queue,
-                                  self.var_out_queue,
-                                  self.close_processes,
-                                  self.remotes[process_id],
-                                  self.num_gpu)) for process_id in range(self.n_processes)]
+        self.processes = [VariationWorker(process_id,
+                                          self.var_in_queue,
+                                          self.var_out_queue,
+                                          self.close_processes,
+                                          self.remotes[process_id],
+                                          self.num_gpu,
+                                          self.evo_cfg) for process_id in range(self.n_processes)]
+
+    def get_new_batch(self, archive, batch_size, proportion_evo):
+        '''
+        Get a new batch of policies to evolve
+        Args:
+            archive: archive of elites
+            batch_size: number of policies to process in a batch
+            proportion_evo: proportion of sampled policies to evolve
+        '''
+        keys = list(archive.keys)
+        actors_x_evo, actors_y_evo = [], None
+        actors_z = []
+        # sample from archive
+        if self.mutation_op and not self.crossover_op:
+            # TODO: this can be optimized with torch Dataset class potentially
+            actors_x_evo = []
+            rand_evo = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
+            for n in range(0, len(rand_evo)):
+                actors_x_evo += [archive[keys[rand_evo[n]]]]
+
+        elif self.crossover_op:
+            actors_x_evo = []
+            actors_y_evo = []
+            rand_evo_1 = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
+            rand_evo_2 = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
+            for n in range(0, len(rand_evo_1)):
+                actors_x_evo += [archive[keys[rand_evo_1[n]]]]
+                actors_y_evo += [archive[keys[rand_evo_2[n]]]]
+
+        self.var_in_queue.put(actors_x_evo, actors_y_evo if actors_y_evo else None, self.crossover_op, self.mutation_op, block=True, timeout=1e9)
 
 
     def __call__(self, archive, batch_size, proportion_evo):

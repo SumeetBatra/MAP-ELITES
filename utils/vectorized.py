@@ -5,7 +5,7 @@ import cloudpickle
 import pickle
 import numpy as np
 from faster_fifo import Queue
-from multiprocessing import Process, Event, Pipe
+from torch.multiprocessing import Event, Pipe, Process as TorchProcess
 
 from torch import Tensor
 
@@ -42,7 +42,7 @@ def parallel_worker(process_id,
                 num_actors = len(actors)
                 for env in envs:
                     env.seed(int((master_seed * 100) * eval_id))
-                obs = torch.tensor([env.reset() for env in envs]).reshape(num_actors, -1).to(actors[0].device)
+                obs = torch.from_numpy(np.array([env.reset() for env in envs])).reshape(num_actors, -1).to(actors[0].device)
                 rews = [0 for _ in range(num_actors)]
                 dones = [False for _ in range(num_actors)]
                 infos = [None for _ in range(num_actors)]
@@ -56,7 +56,7 @@ def parallel_worker(process_id,
                             obs_arr.append(obs)
                             dones[idx] = done
                             infos[idx] = info
-                        obs = torch.tensor(obs_arr).reshape(num_actors, -1).to(actors[0].device)
+                        obs = torch.from_numpy(np.array(obs_arr)).reshape(num_actors, -1).to(actors[0].device)
                 ep_lengths = [env.ep_length for env in envs]
                 bds = [info['desc'] for info in infos]  # list of behavioral descriptors
                 res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
@@ -95,7 +95,7 @@ class ParallelEnv(object):
         self.seed = seed
         self.eval_id = 0
 
-        self.processes = [Process(target=parallel_worker,
+        self.processes = [TorchProcess(target=parallel_worker,
                                   args=(process_id,
                                         CloudpickleWrapper(env_fn),
                                         self.eval_in_queue,
