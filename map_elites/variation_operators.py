@@ -203,6 +203,7 @@ class VariationOperator(object):
     A class for applying the variation operator in parallel.
     """
     def __init__(self,
+                 var_out_queue,
                  num_cpu = 1,
                  num_gpu = 1,
                  crossover_op = 'iso_dd',
@@ -237,7 +238,7 @@ class VariationOperator(object):
         self.n_processes = num_cpu
         self.num_gpu = num_gpu
         self.var_in_queue = Queue()
-        self.var_out_queue = Queue()
+        self.var_out_queue = var_out_queue
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.n_processes + 1)])
         self.close_processes = Event()
 
@@ -257,33 +258,36 @@ class VariationOperator(object):
             batch_size: number of policies to process in a batch
             proportion_evo: proportion of sampled policies to evolve
         '''
-        keys = list(archive.keys())
-        actors_x_evo, actors_y_evo = [], None
-        actors_z = []
-        # sample from archive
-        if self.mutation_op and not self.crossover_op:
-            # TODO: this can be optimized with torch Dataset class potentially
-            actors_x_evo = []
-            rand_evo = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
-            for n in range(0, len(rand_evo)):
-                actors_x_evo += [archive[keys[rand_evo[n]]]]
+        while True:
+            try:
+                keys = list(archive.keys())
+                actors_x_evo, actors_y_evo = [], None
+                actors_z = []
+                # sample from archive
+                if self.mutation_op and not self.crossover_op:
+                    # TODO: this can be optimized with torch Dataset class potentially
+                    actors_x_evo = []
+                    rand_evo = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
+                    for n in range(0, len(rand_evo)):
+                        actors_x_evo += [archive[keys[rand_evo[n]]]]
 
-        elif self.crossover_op:
-            actors_x_evo = []
-            actors_y_evo = []
-            rand_evo_1 = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
-            rand_evo_2 = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
-            for n in range(0, len(rand_evo_1)):
-                actors_x_evo += [archive[keys[rand_evo_1[n]]]]
-                actors_y_evo += [archive[keys[rand_evo_2[n]]]]
+                elif self.crossover_op:
+                    actors_x_evo = []
+                    actors_y_evo = []
+                    rand_evo_1 = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
+                    rand_evo_2 = np.random.randint(len(keys), size=int(batch_size * proportion_evo))
+                    for n in range(0, len(rand_evo_1)):
+                        actors_x_evo += [archive[keys[rand_evo_1[n]]]]
+                        actors_y_evo += [archive[keys[rand_evo_2[n]]]]
 
-        #  get the mlps from the "Individual" type objects
-        actors_x_evo = [x.genotype for x in actors_x_evo]
-        if actors_y_evo is not None:
-            actors_y_evo = [y.genotype for y in actors_y_evo]
+                #  get the mlps from the "Individual" type objects
+                actors_x_evo = [x.genotype for x in actors_x_evo]
+                if actors_y_evo is not None:
+                    actors_y_evo = [y.genotype for y in actors_y_evo]
 
-        self.var_in_queue.put((actors_x_evo, actors_y_evo if actors_y_evo else None), block=True, timeout=1e9)
-        return actors_z
+                self.var_in_queue.put((actors_x_evo, actors_y_evo if actors_y_evo else None), block=True, timeout=1e9)
+            except KeyboardInterrupt:
+                break
 
 
     def __call__(self, archive, batch_size, proportion_evo):

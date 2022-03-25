@@ -9,6 +9,7 @@ from functools import partial
 import torch
 import numpy as np
 
+from faster_fifo import Queue
 from utils.vectorized import ParallelEnv
 from utils.logger import log, config_wandb
 from wrappers.BDWrapper import BDWrapper
@@ -143,8 +144,10 @@ def main():
     torch.manual_seed(cfg['seed'])
     np.random.seed(cfg['seed'])
 
+    to_evaluate_pool = Queue(max_size_bytes=int(1e10))
     # initialize the variation operator (that performs crossovers/mutations)
-    variation_op = VariationOperator(num_cpu=num_var_workers,
+    variation_op = VariationOperator(var_out_queue=to_evaluate_pool,
+                                     num_cpu=num_var_workers,
                                      num_gpu=cfg['num_gpus'],
                                      crossover_op=cfg['crossover_op'],
                                      mutation_op=cfg['mutation_op'],
@@ -159,7 +162,8 @@ def main():
                                      iso_sigma=cfg['iso_sigma'],
                                      line_sigma=cfg['line_sigma'])
 
-    compute_nn(cfg,
+    compute_nn(to_evaluate_pool,
+               cfg,
                envs,
                variation_op,
                actors_file,

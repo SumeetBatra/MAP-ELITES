@@ -50,6 +50,8 @@ import torch
 from sklearn.neighbors import KDTree
 from models.bipedal_walker_model import model_factory
 from itertools import count
+from faster_fifo import Queue
+from torch.multiprocessing import Process as TorchProcess
 
 from map_elites import common as cm
 from utils.logger import log, config_wandb
@@ -80,7 +82,8 @@ def __evaluate(t):
 
 
 # map-elites algorithm (CVT variant)
-def compute_nn(cfg,
+def compute_nn(eval_pool,
+               cfg,
                envs,
                variation_operator,
                actors_file,
@@ -113,6 +116,12 @@ def compute_nn(cfg,
     steps = 0  # env steps
     gpu_id = 0
 
+    # start a separate process that will continuously fetch policies from the archive
+    fetch_process = TorchProcess(target=variation_operator.get_new_batch,
+                                 args=(archive,
+                                 cfg['eval_batch_size'],
+                                 cfg['proportion_evo']))
+
     # main loop
     try:
         while (n_evals < max_evals):
@@ -131,12 +140,14 @@ def compute_nn(cfg,
             else:  # variation/selection loop
                 log.debug("Selection/Variation loop of existing actors")
                 # copy and add variation
-                to_evaluate += variation_operator.get_new_batch(archive, cfg['eval_batch_size'], cfg['proportion_evo'])
+                while len(to_evaluate) < 50:
+                    to_evaluate += eval_pool.get_many_nowait()
+
 
             log.debug(f"Evaluating {len(to_evaluate)} policies")
 
             # evaluations of the fitness and BD of new batch
-            solutions = envs.batch_eval_policies(to_evaluate)
+            solutions = envs.batch_eval_policies(to_evaluate[:50])
             frames = sum(sol[1] for sol in solutions)
             steps += frames
 

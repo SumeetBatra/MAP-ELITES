@@ -168,22 +168,22 @@ class BatchLinearBlock(nn.Module):
     def __init__(self, weights: Tensor, nonlinear, biases=None, device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
-        self.weights = weights  # one slice of all the mlps we want to process as a batch
-        self.biases = biases
+        self.weight = nn.Parameter(weights)  # one slice of all the mlps we want to process as a batch
+        self.bias = nn.Parameter(biases)
         self.nonlinear = nonlinear
 
     def forward(self, x:Tensor) -> Tensor:
-        obs_per_weight = x.shape[0] // self.weights.shape[0]
+        obs_per_weight = x.shape[0] // self.weight.shape[0]
         x = torch.reshape(x, (-1, obs_per_weight, x.shape[1]))
-        w_t = torch.transpose(self.weights, 1, 2)
+        w_t = torch.transpose(self.weight, 1, 2)
         y = torch.bmm(x, w_t)
-        if self.biases is not None:
+        if self.bias is not None:
             y = torch.transpose(y, 0, 1)
-            y += self.biases
+            y += self.bias
         if self.nonlinear is not None:
             y = self.nonlinear(y)
 
-        out_features = self.weights.shape[1]
+        out_features = self.weight.shape[1]
         y = torch.reshape(y, shape=(-1, out_features))
         return y
 
@@ -224,8 +224,8 @@ class BatchMLP(nn.Module):
         for i, layer in enumerate(self.layers):
             for j in range(len(self.mlps)):
                 # 2 * i b/c every other layer is an activation
-                self.mlps[j].layers[2 * i].weight.data = layer.weights[i].clone()
-                self.mlps[j].layers[2 * i].bias.data = layer.biases[i].clone()
+                self.mlps[j].layers[2 * i].weight.data = layer.weight[i].clone()
+                self.mlps[j].layers[2 * i].bias.data = layer.bias[i].clone()
         return self.mlps
 
 
