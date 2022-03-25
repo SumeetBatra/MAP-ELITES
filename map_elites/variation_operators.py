@@ -58,20 +58,35 @@ class VariationWorker(object):
         self.terminate = False
         self.evo_cfg = evo_cfg  # hyperparameters for evolution
 
-        if num_gpus:
-            nvmlInit()
+        if evo_cfg['crossover_op'] in ["sbx", "iso_dd"]:
+            self.crossover_op = getattr(self, evo_cfg['crossover_op'])
+        else:
+            log.warn("Not using the crossover operator")
+            self.crossover_op = False
+
+        if evo_cfg['mutation_op'] in ['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation']:
+            self.mutation_op = getattr(self, evo_cfg['mutation_op'])
+        else:
+            log.warn("Not using the mutation operator")
+            self.mutation_op = False
+        log.debug(f'Mutation operator: {self.mutation_op}')
+        log.debug(f'Crossover operator: {self.crossover_op}')
+
 
         self.process = TorchProcess(target=self._run, daemon=True)
         self.process.start()
 
     def _run(self):
+        if self.num_gpus:
+            nvmlInit()
+
         with torch.no_grad():
             while not self.terminate:
                 try:
                     try:
                         # try to mutate/crossover a batch of policies
-                        actors_x, actors_y, crossover_op, mutation_op = self.var_in_queue.get_nowait()
-                        actors_z = self.batch_evo(actors_x, actors_y, crossover_op, mutation_op)
+                        actors_x, actors_y = self.var_in_queue.get_nowait()
+                        actors_z = self.batch_evo(actors_x, actors_y, self.crossover_op, self.mutation_op)
                         self.var_out_queue.put_many(actors_z, block=True, timeout=1e9)
                     except BaseException:
                         pass
@@ -137,7 +152,7 @@ class VariationWorker(object):
                 y[tensor] = mutation_op(batch_x_state_dict[tensor])
         return y
 
-    def batch_iso_dd(self, x, y):
+    def iso_dd(self, x, y):
         '''
         Iso+Line
         Ref:
@@ -146,30 +161,30 @@ class VariationWorker(object):
         Support for batch processing
         '''
         with torch.no_grad():
-            a = torch.zeros_like(x).normal_(mean=0, std=self.iso_sigma)
-            b = np.random.normal(0, self.line_sigma)
+            a = torch.zeros_like(x).normal_(mean=0, std=self.evo_cfg['iso_sigma'])
+            b = np.random.normal(0, self.evo_cfg['line_sigma'])
             z = x.clone() + a + b * (y - x)
 
-        if not self.max and not self.min:
+        if not self.evo_cfg['max'] and not self.evo_cfg['min']:
             return z
         else:
             with torch.no_grad():
-                return torch.clamp(z, self.min, self.max)
+                return torch.clamp(z, self.evo_cfg['min'], self.evo_cfg['max'])
 
 
     ################################
     # Mutation Operators ###########
     ################################
 
-    def batch_gaussian_mutation(self, x):
+    def gaussian_mutation(self, x):
         """
         Mutate the params of the agents x according to a gaussian
         """
         with torch.no_grad():
             y = x.clone()
             m = torch.rand_like(y)
-            index = torch.where(m < self.mutation_rate)
-            delta = torch.zeros(index[0].shape).normal_(mean=0, std=self.sigma).to(y.device)
+            index = torch.where(m < self.evo_cfg['mutation_rate'])
+            delta = torch.zeros(index[0].shape).normal_(mean=0, std=self.evo_cfg['sigma']).to(y.device)
             if len(y.shape) == 1:
                 y[index[0]] += delta
             elif len(y.shape) == 2:
@@ -177,10 +192,10 @@ class VariationWorker(object):
             else:
                 # 3D i.e. BatchMLP
                 y[index[0], index[1], index[2]] += delta
-            if not self.max and not self.min:
+            if not self.evo_cfg['max'] and not self.evo_cfg['min']:
                 return y
             else:
-                return torch.clamp(y, self.min, self.max)
+                return torch.clamp(y, self.evo_cfg['min'], self.evo_cfg['max'])
 
 
 class VariationOperator(object):
@@ -203,20 +218,8 @@ class VariationOperator(object):
                  iso_sigma = 0.005,
                  line_sigma = 0.05):
 
-        if crossover_op in ["sbx", "iso_dd"]:
-            self.crossover_op = getattr(self, crossover_op)
-        else:
-            log.warn("Not using the crossover operator")
-            self.crossover_op = False
-
-        if mutation_op in ['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation']:
-            self.mutation_op = getattr(self, mutation_op)
-        else:
-            log.warn("Not using the mutation operator")
-            self.mutation_op = False
-        log.debug(f'Mutation operator: {self.mutation_op}')
-        log.debug(f'Crossover operator: {self.crossover_op}')
-
+        self.crossover_op = True if crossover_op is not None else False
+        self.mutation_op = True if mutation_op is not None else False
         self.max = max_gene
         self.min = min_gene
         self.mutation_rate = mutation_rate
@@ -229,7 +232,7 @@ class VariationOperator(object):
         self.line_sigma = line_sigma
         self.evo_cfg = {'min': min_gene, 'max': max_gene, 'mutation_rate': mutation_rate, 'crossover_rate': crossover_rate,
                         'eta_m': eta_m, 'eta_c': eta_c, 'sigma': sigma, 'max_uniform': max_uniform, 'iso_sigma': iso_sigma,
-                        'line_sigma': line_sigma}
+                        'line_sigma': line_sigma, 'crossover_op': crossover_op, 'mutation_op': mutation_op}
 
         self.n_processes = num_cpu
         self.num_gpu = num_gpu
@@ -254,7 +257,7 @@ class VariationOperator(object):
             batch_size: number of policies to process in a batch
             proportion_evo: proportion of sampled policies to evolve
         '''
-        keys = list(archive.keys)
+        keys = list(archive.keys())
         actors_x_evo, actors_y_evo = [], None
         actors_z = []
         # sample from archive
@@ -274,7 +277,13 @@ class VariationOperator(object):
                 actors_x_evo += [archive[keys[rand_evo_1[n]]]]
                 actors_y_evo += [archive[keys[rand_evo_2[n]]]]
 
-        self.var_in_queue.put(actors_x_evo, actors_y_evo if actors_y_evo else None, self.crossover_op, self.mutation_op, block=True, timeout=1e9)
+        #  get the mlps from the "Individual" type objects
+        actors_x_evo = [x.genotype for x in actors_x_evo]
+        if actors_y_evo is not None:
+            actors_y_evo = [y.genotype for y in actors_y_evo]
+
+        self.var_in_queue.put((actors_x_evo, actors_y_evo if actors_y_evo else None), block=True, timeout=1e9)
+        return actors_z
 
 
     def __call__(self, archive, batch_size, proportion_evo):

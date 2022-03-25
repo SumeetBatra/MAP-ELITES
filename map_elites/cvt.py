@@ -131,7 +131,7 @@ def compute_nn(cfg,
             else:  # variation/selection loop
                 log.debug("Selection/Variation loop of existing actors")
                 # copy and add variation
-                to_evaluate += variation_operator(archive, cfg['eval_batch_size'], cfg['proportion_evo'])
+                to_evaluate += variation_operator.get_new_batch(archive, cfg['eval_batch_size'], cfg['proportion_evo'])
 
             log.debug(f"Evaluating {len(to_evaluate)} policies")
 
