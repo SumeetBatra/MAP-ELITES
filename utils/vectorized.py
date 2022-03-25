@@ -20,6 +20,7 @@ def parallel_worker(process_id,
                  eval_in_queue,
                  eval_out_queue,
                  trans_out_queue,
+                 msgr_remote,
                  close_processes,
                  remote,
                  master_seed,
@@ -34,6 +35,7 @@ def parallel_worker(process_id,
             # get a batch of new actors to evaluate
             try:
                 idx, actors, eval_id, eval_mode = eval_in_queue.get_nowait()
+                start_time = time.time()
                 assert len(envs) % len(actors) == 0, 'Number of envs should be a multiple of the number of policies '
                 if num_gpus:
                     gpu_id = get_least_busy_gpu(num_gpus)
@@ -60,6 +62,8 @@ def parallel_worker(process_id,
                 ep_lengths = [env.ep_length for env in envs]
                 bds = [info['desc'] for info in infos]  # list of behavioral descriptors
                 res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
+                runtime = time.time() - start_time
+
                 eval_out_queue.put_many(res)
             except BaseException:
                 pass
@@ -76,7 +80,7 @@ def parallel_worker(process_id,
 
 
 class ParallelEnv(object):
-    def __init__(self, env_fns, batch_size, seed, num_parallel, actors_per_worker, num_gpus):
+    def __init__(self, env_fns, msgr_remote, batch_size, seed, num_parallel, actors_per_worker, num_gpus):
         """
         A class for parallel evaluation
         """
@@ -86,6 +90,7 @@ class ParallelEnv(object):
         self.eval_in_queue = Queue(max_size_bytes=int(1e8))
         self.eval_out_queue = Queue(max_size_bytes=int(1e8))
         self.trans_out_queue = Queue()
+        self.msgr_remote = msgr_remote
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.n_processes + 1)])
         self.global_sync = Event()
         self.close_processes = Event()
@@ -101,6 +106,7 @@ class ParallelEnv(object):
                                         self.eval_in_queue,
                                         self.eval_out_queue,
                                         self.trans_out_queue,
+                                        self.msgr_remote,
                                         self.close_processes,
                                         self.remotes[process_id],
                                         self.seed,

@@ -9,11 +9,11 @@ from functools import partial
 import torch
 import numpy as np
 
+from multiprocessing import Pipe
 from faster_fifo import Queue
 from utils.vectorized import ParallelEnv
 from utils.logger import log, config_wandb
 from wrappers.BDWrapper import BDWrapper
-from map_elites.variation_operators import VariationOperator
 from map_elites.cvt import compute_nn
 from pynvml import *
 
@@ -100,18 +100,7 @@ def main():
     # log hyperparams to wandb
     config_wandb(batch_size=cfg['batch_size'], max_evals=cfg['max_evals'])
 
-    # get process num_workers input
-    num_cores = multiprocessing.cpu_count()
-    num_workers = cfg['num_workers']
-    if num_workers == -1: num_workers = num_cores
-    assert num_workers <= num_cores, '--num_workers must be less than or equal to the number of cores on your machine. Multiple workers per cpu are currently not supported'
-    cfg['num_workers'] = num_workers  # for printing the cfg vars
-
-    # same thing with variation workers
-    num_var_workers = cfg['num_variation_workers']
-    if num_var_workers == -1:
-        cfg['num_variation_workers'] = num_cores
-        num_var_workers = num_cores
+    msgr_local, msgr_remote = Pipe()
 
     # set up factory function to launch parallel environments
     assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
@@ -119,6 +108,7 @@ def main():
     env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'])]
     envs = ParallelEnv(
         env_fns,
+        msgr_remote,
         cfg['batch_size'],
         cfg['seed'],
         cfg['workers_per_gpu'],
@@ -144,28 +134,10 @@ def main():
     torch.manual_seed(cfg['seed'])
     np.random.seed(cfg['seed'])
 
-    to_evaluate_pool = Queue(max_size_bytes=int(1e10))
-    # initialize the variation operator (that performs crossovers/mutations)
-    variation_op = VariationOperator(var_out_queue=to_evaluate_pool,
-                                     num_cpu=num_var_workers,
-                                     num_gpu=cfg['num_gpus'],
-                                     crossover_op=cfg['crossover_op'],
-                                     mutation_op=cfg['mutation_op'],
-                                     max_gene=cfg['max_genotype'],
-                                     min_gene=cfg['min_genotype'],
-                                     mutation_rate=cfg['mutation_rate'],
-                                     crossover_rate=cfg['crossover_rate'],
-                                     eta_m=cfg['eta_m'],
-                                     eta_c=cfg['eta_c'],
-                                     sigma=cfg['sigma'],
-                                     max_uniform=cfg['max_uniform'],
-                                     iso_sigma=cfg['iso_sigma'],
-                                     line_sigma=cfg['line_sigma'])
 
-    compute_nn(to_evaluate_pool,
-               cfg,
+    compute_nn(cfg,
                envs,
-               variation_op,
+               msgr_local,
                actors_file,
                filename,
                cfg['save_path'],

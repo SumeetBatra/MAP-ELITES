@@ -15,7 +15,7 @@ import torch
 import time
 from faster_fifo import Queue
 from utils.logger import log
-from models.bipedal_walker_model import BipedalWalkerNN
+from models.bipedal_walker_model import BipedalWalkerNN, model_factory
 from torch.multiprocessing import Process as TorchProcess, Pipe, Event
 from functools import partial
 from pynvml import *
@@ -48,7 +48,7 @@ def parallel_variation_worker(process_id,
 
 
 class VariationWorker(object):
-    def __init__(self, process_id, var_in_queue, var_out_queue, close_processes, remote, num_gpus, evo_cfg):
+    def __init__(self, process_id, var_in_queue, var_out_queue, msgr_remote, close_processes, remote, num_gpus, evo_cfg):
         self.pid = process_id
         self.var_in_queue = var_in_queue
         self.var_out_queue = var_out_queue
@@ -203,6 +203,8 @@ class VariationOperator(object):
     A class for applying the variation operator in parallel.
     """
     def __init__(self,
+                 cfg,
+                 var_in_queue,
                  var_out_queue,
                  num_cpu = 1,
                  num_gpu = 1,
@@ -219,6 +221,8 @@ class VariationOperator(object):
                  iso_sigma = 0.005,
                  line_sigma = 0.05):
 
+        self.cfg = cfg
+        self.archive = {}
         self.crossover_op = True if crossover_op is not None else False
         self.mutation_op = True if mutation_op is not None else False
         self.max = max_gene
@@ -237,7 +241,7 @@ class VariationOperator(object):
 
         self.n_processes = num_cpu
         self.num_gpu = num_gpu
-        self.var_in_queue = Queue()
+        self.var_in_queue = var_in_queue
         self.var_out_queue = var_out_queue
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.n_processes + 1)])
         self.close_processes = Event()
@@ -249,6 +253,20 @@ class VariationOperator(object):
                                           self.remotes[process_id],
                                           self.num_gpu,
                                           self.evo_cfg) for process_id in range(self.n_processes)]
+
+    def init_archive(self):
+        gpu_id = 0
+        while len(self.archive) <= self.cfg['random_init']:
+            to_evaluate = []
+            log.debug("Initializing the neural network actors' weights from scratch")
+            for i in range(0, self.cfg['random_init_batch']):
+                device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
+                actor = model_factory(hidden_size=128, device=device).to(device)
+                to_evaluate += [actor]
+                if self.num_gpu:
+                    log.debug(f'New actor going to gpu {gpu_id}')
+                    gpu_id = (gpu_id + 1) % self.num_gpu
+            self.var_out_queue.put(to_evaluate, block=True, timeout=1e9)
 
     def get_new_batch(self, archive, batch_size, proportion_evo):
         '''
