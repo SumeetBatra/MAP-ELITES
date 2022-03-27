@@ -36,7 +36,7 @@
 #|
 #| The fact that you are presently reading this means that you have
 #| had knowledge of the CeCILL license and that you accept its terms.
-
+import copy
 import math
 import numpy as np
 
@@ -87,6 +87,9 @@ def compute_ht(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_e
     cluster_centers = cm.cvt(n_niches, cfg['dim_map'], cfg['cvt_samples'], cfg['cvt_use_cache'])
     kdt = KDTree(cluster_centers, leaf_size=30, metric='euclidean')
     cm.__write_centroids(cluster_centers)
+
+    # variation workers will put the evolved policies in here for the evaluation workers to process
+    all_evolved_actors = [copy.deepcopy(model) for model in all_actors]
 
     # create the map of elites
     manager = multiprocessing.Manager()

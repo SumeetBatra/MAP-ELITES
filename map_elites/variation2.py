@@ -27,6 +27,7 @@ class VariationOperator(object):
     def __init__(self,
                  cfg,
                  all_actors,
+                 all_evolved_actors,
                  elites_map,
                  num_processes=1,
                  num_gpus=0,
@@ -45,6 +46,7 @@ class VariationOperator(object):
 
         self.cfg = cfg
         self.all_actors = all_actors
+        self.all_evolved_actors = all_evolved_actors
         self.elites_map = elites_map
         self.num_processes = num_processes
         self.num_gpus = num_gpus
@@ -81,12 +83,23 @@ class VariationOperator(object):
             keys = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
             self.evolve_in_queue.put_many(keys.tolist(), block=True, timeout=1e9)
 
+        self.flush(self.evolve_in_queue)
+
+    def flush(self, q):
+        '''
+        Flush the remaining contents of a q
+        :param q: any standard Queue() object
+        '''
+        while not q.empty():
+            q.get_many()
+
 
 
 class VariationWorker(object):
-    def __init__(self, process_id, all_actors, elites_map, evolve_in_queue, evolve_out_queue, close_processes, remote, num_gpus, evo_cfg):
+    def __init__(self, process_id, all_actors, all_evolved_actors, elites_map, evolve_in_queue, evolve_out_queue, close_processes, remote, num_gpus, evo_cfg):
         self.pid = process_id
         self.all_actors = all_actors
+        self.all_evolved_actors = all_evolved_actors
         self.elites_map = elites_map
         self.evolve_in_queue = evolve_in_queue
         self.evolve_out_queue = evolve_out_queue
@@ -96,8 +109,8 @@ class VariationWorker(object):
         self.terminate = False
         self.evo_cfg = evo_cfg  # hyperparameters for evolution
 
-        log.debug(f'Mutation operator: {self.mutation_op}')
-        log.debug(f'Crossover operator: {self.crossover_op}')
+        log.debug(f'Mutation operator: {evo_cfg["mutation_op"]}')
+        log.debug(f'Crossover operator: {evo_cfg["crossover_op"]}')
 
         if evo_cfg['crossover_op'] in ["sbx", "iso_dd"]:
             self.crossover_op = getattr(self, evo_cfg['crossover_op'])
@@ -132,12 +145,12 @@ class VariationWorker(object):
             gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
             device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
             batch_actors_x = BatchMLP(actors_x_evo, device)
-            batch_actors_y = BatchMLP(actors_y_evo, device)
+            batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo else None
             actors_z = self.evo(batch_actors_x, batch_actors_y, self.crossover_op, self.mutation_op)
 
-            self.evolve_out_queue.put(actors_z, block=True, timeout=1e9)
-
-
+            # update the all_evolved_actors pool and send the keys to the evaluation workers
+            # TODO: Fix this
+            self.all_evolved_actors[actor_keys] = actors_z
 
     def _terminate(self):
         self.terminate = True
