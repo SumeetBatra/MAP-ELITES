@@ -8,7 +8,7 @@ import copy
 def model_factory(device, hidden_size=256, init_type='xavier_uniform'):
     model = BipedalWalkerNN(device, hidden_size=hidden_size, init_type=init_type)
     model.apply(model.init_weights)
-    model.share_memory()
+    model = model.to(device).share_memory()
     return model
 
 

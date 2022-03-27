@@ -206,6 +206,18 @@ class BatchMLP(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
+    def set_parent_id(self, which_parent, ids):
+        assert which_parent == 1 or which_parent == 2, 'invalid parent value. Can only have 2 parents (parent 1 or parent 2)'
+        for mlp, id in zip(self.mlps, ids):
+            if which_parent == 1:
+                mlp.parent_1_id = id
+            else:
+                mlp.parent_2_id = id
+
+    def get_mlp_ids(self):
+        ids = [mlp.id for mlp in self.mlps]
+        return ids
+
     def _slice_mlps(self):
         num_layers = len(self.mlps[0].layers)
         blocks = []

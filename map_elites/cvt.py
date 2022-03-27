@@ -75,6 +75,30 @@ def __add_to_archive(s, centroid, archive, kdt):
         archive[n] = s
         return 1
 
+
+def compute_ht(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_evals=1e5):
+    device = torch.device("cpu")  # batches of agents will be put on the least busiest gpu if cuda available during evolution/evaluation
+    # initialize all actors
+    # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
+    all_actors = [model_factory(device) for _ in range(n_niches)]
+    mapped = [False for _ in range(n_niches)]  # no actors are mapped at the start of training
+
+    # create the CVT
+    cluster_centers = cm.cvt(n_niches, cfg['dim_map'], cfg['cvt_samples'], cfg['cvt_use_cache'])
+    kdt = KDTree(cluster_centers, leaf_size=30, metric='euclidean')
+    cm.__write_centroids(cluster_centers)
+
+    # create the map of elites
+    manager = multiprocessing.Manager()
+    elites_map = manager.dict()
+
+    # initialize the elites map
+
+
+
+
+
+
 # map-elites algorithm (CVT variant)
 def compute_nn(cfg,
                envs,
