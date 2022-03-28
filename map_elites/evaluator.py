@@ -8,7 +8,7 @@ from faster_fifo import Queue
 from torch.multiprocessing import Event, Pipe, Process as TorchProcess
 from utils.vectorized import BatchMLP
 from map_elites import common as cm
-from map_elites.cvt import Individual
+from itertools import count
 
 from torch import Tensor
 
@@ -18,11 +18,38 @@ from pynvml import *
 
 
 
+# flags for the archive
+UNUSED = 0
+MAPPED = 1
+
+
+class Individual(object):
+    _ids = count(0)
+
+    def __init__(self, genotype, phenotype, fitness, centroid=None):
+        """
+        A single agent
+        param genotype:  The parameters that produced the behavior. I.e. neural network, etc.
+        param phenotype: the resultant behavior i.e. the behavioral descriptor
+        param fitness: the fitness of the model. In the case of a neural network, this is the total accumulated rewards
+        param centroid: the closest CVT generator (a behavior) to the behavior that this individual exhibits
+        """
+        genotype.id = next(self._ids)
+        Individual.current_id = genotype.id  # TODO: not sure what this is for
+        self.genotype = genotype
+        self.phenotype = phenotype
+        self.fitness = fitness
+        self.centroid = centroid
+        self.novelty = None
+
+
+
 class Evaluator(object):
-    def __init__(self, env_fns, batch_size, seed, num_parallel, actors_per_worker, num_gpus):
+    def __init__(self, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, seed, num_parallel,
+                 actors_per_worker, num_gpus, kdt, msgr_remote):
         '''
         A class for parallel evaluations
-        :param env_fns: 2d list of gym envs. Each worker gets a batch of envs to step through
+        :param env_fns: 2d list of gym envs (num_processes x env_batch_size). Each worker gets a batch of envs to step through
         :param batch_size:
         :param seed:
         :param num_parallel:
@@ -33,24 +60,45 @@ class Evaluator(object):
         self.num_gpus = num_gpus
         self.eval_in_queue = Queue(max_size_bytes=int(1e7))
         self.eval_out_queue = Queue(max_size_bytes=int(1e7))
+        self.remotes, self.locals = zip(*[Pipe() for _ in range(self.num_processes)])
 
+        self.processes = [EvalWorker(process_id,
+                                     env_fn,
+                                     all_actors,
+                                     eval_cache,
+                                     eval_cache_locks,
+                                     elites_map,
+                                     batch_size,
+                                     seed,
+                                     actors_per_worker,
+                                     num_gpus,
+                                     self.eval_in_queue,
+                                     self.eval_out_queue,
+                                     self.remotes[process_id],
+                                     kdt,
+                                     msgr_remote) for process_id, env_fn in enumerate(env_fns)]
+
+    def close_envs(self):
+        for process in self.processes:
+            process.terminate()
 
 class EvalWorker(object):
-    def __init__(self, env_fns, all_actors, all_evolved_actors, elites_map, batch_size, master_seed, num_parallel,
-                 actors_per_worker, num_gpus, eval_in_queue, eval_out_queue, remote, kdt):
+    def __init__(self, process_id, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, master_seed,
+                 actors_per_worker, num_gpus, eval_in_queue, eval_out_queue, remote, kdt, msgr_remote):
         self.env_fn_wrappers = env_fns
         self.all_actors = all_actors
-        self.all_evolved_actors = all_evolved_actors
+        self.eval_cache = eval_cache
+        self.eval_cache_locks = eval_cache_locks
         self.elites_map = elites_map
         self.batch_size = batch_size
         self.master_seed = master_seed
-        self.num_parallel = num_parallel
         self.actors_per_worker = actors_per_worker
         self.num_gpus = num_gpus
-        self.terminate = False
+        self._terminate = False
         self.eval_in_queue = eval_in_queue
         self.eval_out_queue = eval_out_queue
         self.remote = remote
+        self.msgr_remote = msgr_remote
         self.kdt = kdt  # centroidal voronoi tessalations
 
         self.process = TorchProcess(target=self._run, daemon=True)
@@ -64,9 +112,14 @@ class EvalWorker(object):
         envs = [self.env_fn_wrappers.x[i]() for i in range(len(self.env_fn_wrappers.x))]
 
         # begin the process loop
-        while not self.terminate:
-            evolved_actor_keys, eval_id = self.eval_in_queue.get(block=True, timeout=1e9)  # TODO: make sure this interface is implemented correctly
-            actors = self.all_evolved_actors[evolved_actor_keys]
+        while not self._terminate:
+            eval_id, evolved_actor_keys = self.eval_in_queue.get(block=True, timeout=1e9)  # TODO: make sure this interface is implemented correctly
+            start_time = time.time()
+            actors = []
+            for key in evolved_actor_keys:
+                self.eval_cache_locks[key].acquire()
+                actors += [self.eval_cache[key]]
+                self.eval_cache_locks.release()
             assert len(envs) % len(actors) == 0, 'Number of envs should be a multiple of the number of policies '
             gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else None
             device = torch.device(f'cuda:{gpu_id}' if (torch.cuda.is_available() and gpu_id is not None) else 'cpu')
@@ -92,21 +145,28 @@ class EvalWorker(object):
                         infos[idx] = info
                     obs = torch.from_numpy(np.array(obs_arr)).reshape(num_actors, -1).to(actors[0].device)
             ep_lengths = [env.ep_length for env in envs]
+            frames = sum(ep_lengths)
             bds = [info['desc'] for info in infos]  # list of behavioral descriptors
             res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
 
-            self._map_agents(actors, bds, rews)
+            runtime = time.time() - start_time
+            self._map_agents(actors, bds, rews, runtime, frames)
 
-    def _terminate(self):
-        self.terminate = True
+        for env in envs:
+            env.close()
 
-    def _map_agents(self, actors, descs, rews):
+    def terminate(self):
+        self._terminate = True
+
+    def _map_agents(self, actors, descs, rews, runtime, frames):
         '''
-        Map the evaluated agents using their behavior descriptors
+        Map the evaluated agents using their behavior descriptors. Send the metadata back to the main process for logging
         :param behav_descs: behavior descriptors of a batch of evaluated agents
         :param rews: fitness scores of a batch of evaluated agents
         '''
+        metadata = []
         for actor, desc, rew in zip(actors, descs, rews):
+            added = False
             agent = Individual(genotype=actor, phenotype=desc, fitness=rew)
             niche_index = self.kdt.query([desc], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
             niche = self.kdt.data[niche_index]
@@ -118,20 +178,28 @@ class EvalWorker(object):
                 if agent.fitness > fitness:
                     self.elites_map[n] = (map_agent_id, agent.fitness)
                     # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
-                    self.all_actors[map_agent_id] = agent
+                    self.all_actors[map_agent_id] = (agent, MAPPED)
+                    added = True
             else:
                 # need to find a new, unused agent id since this agent maps to a new cell
                 agent_id = self._find_available_agent_id()
                 self.elites_map[n] = (agent_id, agent.fitness)
-                self.all_actors[agent_id] = agent
+                self.all_actors[agent_id] = (agent, MAPPED)
+                added = True
+
+            if added:
+                md = (agent.genotype.id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
+                      agent.genotype.parent_1_id, agent.genotype.parent_2_id, agent.genotype.type, agent.genotype.novel, agent.genotype.delta_f)
+                metadata.append(md)
+
+        self.msgr_remote.send((metadata, runtime, frames))
 
     def _find_available_agent_id(self):
         '''
         If an agent maps to a new cell in the elites map, need to give it a new, unused id from the pool of agents
         :returns an agent id that's not being used by some other agent in the elites map
         '''
-        # TODO: implement
-        return -1
+        return next(i for i in range(len(self.eval_cache)) if self.eval_cache[i][1] == UNUSED)
 
 
 

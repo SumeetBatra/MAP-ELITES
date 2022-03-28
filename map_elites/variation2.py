@@ -27,7 +27,8 @@ class VariationOperator(object):
     def __init__(self,
                  cfg,
                  all_actors,
-                 all_evolved_actors,
+                 eval_cache,
+                 eval_cache_locks,
                  elites_map,
                  num_processes=1,
                  num_gpus=0,
@@ -46,7 +47,7 @@ class VariationOperator(object):
 
         self.cfg = cfg
         self.all_actors = all_actors
-        self.all_evolved_actors = all_evolved_actors
+        self.eval_cache = eval_cache
         self.elites_map = elites_map
         self.num_processes = num_processes
         self.num_gpus = num_gpus
@@ -73,15 +74,36 @@ class VariationOperator(object):
                         'iso_sigma': iso_sigma,
                         'line_sigma': line_sigma, 'crossover_op': crossover_op, 'mutation_op': mutation_op}
 
+        self.processes = [VariationWorker(process_id,
+                                          all_actors,
+                                          eval_cache,
+                                          eval_cache_locks,
+                                          elites_map,
+                                          self.evolve_in_queue,
+                                          self.evolve_out_queue,
+                                          self.remotes[process_id],
+                                          num_gpus,
+                                          self.evo_cfg) for process_id in range(self.num_processes)]
+
     def init_map(self):
         '''
         Initialize the map of elites
         '''
         rand_init_batch_size = self.cfg['random_init_batch']
+        log.debug(f'Initializing the map of elites with {self.cfg["random_init"]} policies')
         while len(self.elites_map) <= self.cfg['random_init']:
-            log.debug(f'Initializing the map of elites with {self.cfg["random_init"]} policies')
             keys = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
-            self.evolve_in_queue.put_many(keys.tolist(), block=True, timeout=1e9)
+            actor_x_ids = []
+            actor_y_ids = [None for _ in range(len(actor_x_ids))]
+            if self.mutation_op and not self.crossover_op:
+                actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+
+            elif self.crossover_op:
+                actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+                actor_y_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+
+            all_actor_ids = list(zip(actor_x_ids, actor_y_ids))
+            self.evolve_in_queue.put_many(all_actor_ids, block=True, timeout=1e9)
 
         self.flush(self.evolve_in_queue)
 
@@ -93,21 +115,49 @@ class VariationOperator(object):
         while not q.empty():
             q.get_many()
 
+    def evolve_new_batch(self):
+        '''
+        Get new batch of agents to evolve
+        '''
+        batch_size = self.cfg['batch_size'] * self.cfg['proportion_evo']
+        log.debug(f'Evolving a new batch of {batch_size} policies')
+        keys = list(self.elites_map.keys())
+        actor_x_ids = []
+        actor_y_ids = [None for _ in range(len(actor_x_ids))]
+        if self.mutation_op and not self.crossover_op:
+            actor_x_inds = np.random.randint(len(keys), size=batch_size)
+            for i in range(len(actor_x_inds)):
+                actor_x_ids += self.elites_map[keys[actor_x_inds[i]]]
+
+        elif self.crossover_op:
+            actor_x_inds = np.random.randint(len(keys), size=batch_size)
+            actor_y_inds = np.random.randint(len(keys), size=batch_size)
+            for i in range(len(actor_x_inds)):
+                actor_x_ids += self.elites_map[keys[actor_x_inds[i]]]
+                actor_y_ids += self.elites_map[keys[actor_y_inds[i]]]
+
+        all_actor_ids = list(zip(actor_x_ids, actor_y_ids))
+        self.evolve_in_queue.put_many(all_actor_ids, block=True, timeout=1e9)
+
+    def close_processes(self):
+        for process in self.processes:
+            process.terminate()
 
 
 class VariationWorker(object):
-    def __init__(self, process_id, all_actors, all_evolved_actors, elites_map, evolve_in_queue, evolve_out_queue, close_processes, remote, num_gpus, evo_cfg):
+    def __init__(self, process_id, all_actors, eval_cache, eval_cache_locks, elites_map, evolve_in_queue, evolve_out_queue, remote, num_gpus, evo_cfg):
         self.pid = process_id
         self.all_actors = all_actors
-        self.all_evolved_actors = all_evolved_actors
+        self.eval_cache = eval_cache
+        self.eval_cache_locks = eval_cache_locks
         self.elites_map = elites_map
         self.evolve_in_queue = evolve_in_queue
         self.evolve_out_queue = evolve_out_queue
-        self.close_processes = close_processes
         self.remote = remote
         self.num_gpus = num_gpus
-        self.terminate = False
+        self._terminate = False
         self.evo_cfg = evo_cfg  # hyperparameters for evolution
+        self.eval_id = 0
 
         log.debug(f'Mutation operator: {evo_cfg["mutation_op"]}')
         log.debug(f'Crossover operator: {evo_cfg["crossover_op"]}')
@@ -131,16 +181,12 @@ class VariationWorker(object):
         if self.num_gpus:
             nvmlInit()  # track available gpu resources
 
-        while not self.terminate:
-            actor_keys = self.evolve_in_queue.get_many(block=True, timeout=1e9)
+        while not self._terminate:
+            actor_x_ids, actor_y_ids = self.evolve_in_queue.get_many(block=True, timeout=1e9)
             actors_x_evo, actors_y_evo, actors_z = [], None, []
-            if self.mutation_op and not self.crossover_op:
-                actors_x_evo = self.all_actors[actor_keys]
 
-            elif self.crossover_op:
-                num_keys = len(actor_keys)
-                actors_x_keys, actors_y_keys = actor_keys[:num_keys//2], actor_keys[num_keys//2:]
-                actors_x_evo, actors_y_evo = self.all_actors[actors_x_keys], self.all_actors[actors_y_keys]
+            actors_x_evo = self.all_actors[actor_x_ids]
+            actors_y_evo = self.all_actors[actor_y_ids] if actor_y_ids is not None else None
 
             gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
             device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
@@ -149,11 +195,17 @@ class VariationWorker(object):
             actors_z = self.evo(batch_actors_x, batch_actors_y, self.crossover_op, self.mutation_op)
 
             # update the all_evolved_actors pool and send the keys to the evaluation workers
-            # TODO: Fix this
-            self.all_evolved_actors[actor_keys] = actors_z
+            # synchronize access to eval_cache since different processes read and write to this
+            for idx, actor_z in zip(actor_x_ids, actors_z):
+                self.eval_cache_locks[idx].acquire()
+                self.eval_cache[idx] = actor_z
+                self.eval_cache_locks[idx].release()
 
-    def _terminate(self):
-        self.terminate = True
+            self.evolve_out_queue.put((self.eval_id, actor_x_ids), block=True, timeout=1e9)
+            self.eval_id += 1
+
+    def terminate(self):
+        self._terminate = True
 
     def evo(self, actor_x, actor_y, crossover_op=None, mutation_op=None):
         '''

@@ -47,6 +47,7 @@ def parse_args(argv=None):
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
     parser.add_argument('--cp_save_period', default=5000, type=int, help='How many evaluations b/w saving checkpoints')
+    parser.add_argument('--use_wandb', default=True, type=str2bool, help='log results to weights and biases')
 
     # args for parallelization
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
@@ -98,7 +99,8 @@ def main():
         nvmlInit()  # for tracking gpu resources
 
     # log hyperparams to wandb
-    config_wandb(batch_size=cfg['batch_size'], max_evals=cfg['max_evals'])
+    if cfg['use_wandb']:
+        config_wandb(batch_size=cfg['batch_size'], max_evals=cfg['max_evals'])
 
     msgr_local, msgr_remote = Pipe()
 
@@ -133,6 +135,19 @@ def main():
     # set seeds
     torch.manual_seed(cfg['seed'])
     np.random.seed(cfg['seed'])
+
+    # get process num_workers input
+    num_cores = multiprocessing.cpu_count()
+    num_workers = cfg['num_workers']
+    if num_workers == -1: num_workers = num_cores
+    assert num_workers <= num_cores, '--num_workers must be less than or equal to the number of cores on your machine. Multiple workers per cpu are currently not supported'
+    cfg['num_workers'] = num_workers  # for printing the cfg vars
+
+    # same thing with variation workers
+    num_var_workers = cfg['num_variation_workers']
+    if num_var_workers == -1:
+        cfg['num_variation_workers'] = num_cores
+        num_var_workers = num_cores
 
 
     compute_nn(cfg,

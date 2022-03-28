@@ -48,17 +48,25 @@ import shutil
 import glob
 import torch
 import torch.multiprocessing as multiprocessing
-from multiprocessing import Pipe()
 from sklearn.neighbors import KDTree
 from models.bipedal_walker_model import model_factory
-from itertools import count
 from faster_fifo import Queue
-from map_elites.variation_operators import VariationOperator
-from torch.multiprocessing import Process as TorchProcess
+from map_elites.variation2 import VariationOperator
+from map_elites.evaluator import Evaluator, Individual
+from torch.multiprocessing import Process as TorchProcess, Pipe
 
 from map_elites import common as cm
 from utils.logger import log, config_wandb
 from utils.utils import *
+
+
+# flags for the archive
+UNUSED = 0
+MAPPED = 1
+TO_EVALUATE = 2
+EVALUATED = 3
+
+EVAL_CACHE_SIZE = 500
 
 
 def __add_to_archive(s, centroid, archive, kdt):
@@ -76,12 +84,17 @@ def __add_to_archive(s, centroid, archive, kdt):
         return 1
 
 
-def compute_ht(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_evals=1e5):
+def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, n_niches=1000, max_evals=1e5):
+    # for shared objects
+    manager = multiprocessing.Manager()
+
     device = torch.device("cpu")  # batches of agents will be put on the least busiest gpu if cuda available during evolution/evaluation
     # initialize all actors
     # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
-    all_actors = [model_factory(device) for _ in range(n_niches)]
-    mapped = [False for _ in range(n_niches)]  # no actors are mapped at the start of training
+    all_actors = [(model_factory(device), UNUSED) for _ in range(n_niches)]
+    # variation workers will put actors that need to be evaluated in here
+    eval_cache = [copy.deepcopy(model) for model, _ in all_actors]
+    eval_cache_locks = [multiprocessing.Lock() for _ in range(n_niches)]
 
     # create the CVT
     cluster_centers = cm.cvt(n_niches, cfg['dim_map'], cfg['cvt_samples'], cfg['cvt_use_cache'])
@@ -92,10 +105,104 @@ def compute_ht(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_e
     all_evolved_actors = [copy.deepcopy(model) for model in all_actors]
 
     # create the map of elites
-    manager = multiprocessing.Manager()
     elites_map = manager.dict()
 
+    # variables for logging
+    msgr_local, msgr_remote = Pipe()
+    n_evals = 0
+    cp_evals = 0
+    steps = 0
+
+    # initialize the evaluation workers
+    evaluator = Evaluator(env_fns,
+                          all_actors,
+                          eval_cache,
+                          eval_cache_locks,
+                          elites_map,
+                          cfg['batch_size'],
+                          cfg['seed'],
+                          cfg['workers_per_gpu'],
+                          cfg['actors_batch_size'],
+                          cfg['num_gpus'],
+                          kdt,
+                          msgr_remote)
+
+    # initialize the variation workers
+    variation_op = VariationOperator(cfg,
+                                     all_actors,
+                                     eval_cache,
+                                     eval_cache_locks,
+                                     elites_map,
+                                     num_var_workers,
+                                     cfg['num_gpus'],
+                                     crossover_op=cfg['crossover_op'],
+                                     mutation_op=cfg['mutation_op'],
+                                     max_gene=cfg['max_gene'],
+                                     min_gene=cfg['min_gene'],
+                                     mutation_rate=cfg['mutation_rate'],
+                                     crossover_rate=cfg['crossover_rate'],
+                                     eta_m=cfg['eta_m'],
+                                     eta_c=cfg['eta_c'],
+                                     sigma=cfg['sigma'],
+                                     max_uniform=cfg['max_uniform'],
+                                     iso_sigma=cfg['iso_sigma'],
+                                     line_sigma=cfg['line_sigma'])
+
     # initialize the elites map
+    variation_op.init_map()
+
+    # main loop
+    try:
+        while n_evals < max_evals:
+            variation_op.evolve_new_batch()
+
+            if msgr_local.poll():
+                metadata, runtime, frames = msgr_local.recv()
+                evals = len(metadata)
+                n_evals += evals
+                cp_evals += evals
+                steps += frames
+                fit_list = []
+                for genotype_id, fitness, phenotype, centroid, p1_id, p2_id, genotype_type, genotype_novel, delta_f in metadata:
+                    fit_list.append(fitness)
+                    actors_file.write("{} {} {} {} {} {} {} {} {} {}\n".format(n_evals,
+                                                                               genotype_id,
+                                                                               fitness,
+                                                                               phenotype,
+                                                                               centroid,
+                                                                               p1_id,
+                                                                               p2_id,
+                                                                               genotype_type,
+                                                                               genotype_novel,
+                                                                               delta_f))
+                    actors_file.flush()
+
+                # logging
+                eps = round(evals / runtime, 1)
+                fps = round(frames / runtime, 1)
+                fit_list = np.array(fit_list)
+                # write log
+                log.info(f'n_evals: {n_evals}, mean fitness: {np.mean(fit_list)}, median fitness: {np.median(fit_list)}, \
+                    5th percentile: {np.percentile(fit_list, 5)}, 95th percentile: {np.percentile(fit_list, 95)}')
+                log.debug(f'Evals/sec (EPS): {eps}, FPS: {fps}, steps: {steps}')
+
+            # maybe save a checkpoint
+            if cp_evals >= cfg['cp_save_period'] and cfg['cp_save_period'] != -1:
+                save_checkpoint(elites_map, all_actors, n_evals, filename, cfg['checkpoint_dir'], cfg)
+                while len(get_checkpoints(cfg['checkpoint_dir'])) > cfg['keep_checkpoints']:
+                    oldest_checkpoint = get_checkpoints(cfg['checkpoint_dir'])[0]
+                    if os.path.exists(oldest_checkpoint):
+                        log.debug('Removing %s', oldest_checkpoint)
+                        shutil.rmtree(oldest_checkpoint)
+                cp_evals = 0
+
+    except KeyboardInterrupt:
+        log.debug('Keyboard interrupt detected. Saving final results')
+
+    cm.save_archive(elites_map, all_actors, n_evals, filename, save_path)
+    save_cfg(cfg, save_path)
+    variation_op.close_processes()
+    evaluator.close_envs()
 
 
 
@@ -193,7 +300,8 @@ def compute_nn(cfg,
                 # copy and add variation
                 while len(to_evaluate) < 50:
                     try:
-                        to_evaluate += eval_pool.get_many_nowait()
+                        pass
+                        # to_evaluate += eval_pool.get_many_nowait()
                     except BaseException:
                         pass
 
@@ -263,21 +371,3 @@ def compute_nn(cfg,
     envs.close()
 
 
-class Individual(object):
-    _ids = count(0)
-
-    def __init__(self, genotype, phenotype, fitness, centroid=None):
-        """
-        A single agent
-        param genotype:  The parameters that produced the behavior. I.e. neural network, etc.
-        param phenotype: the resultant behavior i.e. the behavioral descriptor
-        param fitness: the fitness of the model. In the case of a neural network, this is the total accumulated rewards
-        param centroid: the closest CVT generator (a behavior) to the behavior that this individual exhibits
-        """
-        genotype.id = next(self._ids)
-        Individual.current_id = genotype.id  # TODO: not sure what this is for
-        self.genotype = genotype
-        self.phenotype = phenotype
-        self.fitness = fitness
-        self.centroid = centroid
-        self.novelty = None

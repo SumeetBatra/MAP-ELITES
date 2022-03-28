@@ -220,7 +220,7 @@ def parallel_eval(evaluate_function, to_evaluate, pool, params):
 
 # format: fitness, centroid, desc,
 # fitness, centroid, desc and are vectors
-def save_archive(archive, gen, archive_name, save_path, save_models=False):
+def save_archive(archive, all_actors, gen, archive_name, save_path, save_models=False):
     def write_array(a, f):
         for i in a:
             f.write(str(i) + ' ')
@@ -229,7 +229,8 @@ def save_archive(archive, gen, archive_name, save_path, save_models=False):
     if not os.path.exists(model_path):
         os.mkdir(model_path)
     with open(filename, 'w') as f:
-        for k in archive.values():
+        for key in archive.values():
+            k = all_actors[key]
             f.write(str(k.fitness) + ' ')
             write_array(k.centroid, f)
             write_array(k.phenotype, f)

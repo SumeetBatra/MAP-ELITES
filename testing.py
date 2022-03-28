@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import time
+import torch.multiprocessing as mp
+from torch.multiprocessing import Process
 import pandas as pd
 from models.bipedal_walker_model import BipedalWalkerNN
 from enjoy_bipedal_walker import enjoy
@@ -21,6 +23,18 @@ sigma = np.ones(1000)
 # 581804
 # 701314 - walking
 
+def job1(x, lock):
+    lock.acquire(block=True, timeout=1e9)
+    print("Acquired the lock in job1")
+    time.sleep(3)
+    lock.release()
+    print("released the lock in job1")
+
+def job2(x, lock):
+    lock.acquire()
+    print(x)
+    lock.release()
+
 if __name__ == '__main__':
     # filepath = './checkpoints/checkpoint_002790022/archive_CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_2790022.dat'
     # df = pd.read_csv(filepath, sep=' ')
@@ -36,8 +50,9 @@ if __name__ == '__main__':
     #     print(f'Running policy {int(policy_id)}')
     #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
     #     enjoy(policy_path, render=True)
-    def func(a, b):
-        return a + b
-
-    f = partial(func, 1, 2)
-    pass
+    lock = mp.Lock()
+    x = 1
+    p1 = Process(target=job1, args=(x, lock))
+    p2 = Process(target=job2, args=(x, lock))
+    p1.start()
+    p2.start()
