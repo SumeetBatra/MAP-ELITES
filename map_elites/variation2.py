@@ -30,6 +30,7 @@ class VariationOperator(object):
                  eval_cache,
                  eval_cache_locks,
                  elites_map,
+                 eval_out_queue,
                  num_processes=1,
                  num_gpus=0,
                  crossover_op='iso_dd',
@@ -52,7 +53,7 @@ class VariationOperator(object):
         self.num_processes = num_processes
         self.num_gpus = num_gpus
         self.evolve_in_queue = Queue(max_size_bytes=int(1e7))
-        self.evolve_out_queue = Queue(max_size_bytes=int(1e7))
+        self.evolve_out_queue = eval_out_queue
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.num_processes)])
 
         # evolution hyperparams
@@ -102,7 +103,7 @@ class VariationOperator(object):
                 actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
                 actor_y_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
 
-            all_actor_ids = list(zip(actor_x_ids, actor_y_ids))
+            all_actor_ids = np.array(list(zip(actor_x_ids, actor_y_ids))).reshape(-1, self.cfg['actors_batch_size'], 2).tolist()
             self.evolve_in_queue.put_many(all_actor_ids, block=True, timeout=1e9)
 
         self.flush(self.evolve_in_queue)
@@ -119,8 +120,8 @@ class VariationOperator(object):
         '''
         Get new batch of agents to evolve
         '''
-        batch_size = self.cfg['batch_size'] * self.cfg['proportion_evo']
-        log.debug(f'Evolving a new batch of {batch_size} policies')
+        batch_size = int(self.cfg['batch_size'] * self.cfg['proportion_evo'])
+        # log.debug(f'Evolving a new batch of {batch_size} policies')
         keys = list(self.elites_map.keys())
         actor_x_ids = []
         actor_y_ids = [None for _ in range(len(actor_x_ids))]
@@ -136,7 +137,7 @@ class VariationOperator(object):
                 actor_x_ids += self.elites_map[keys[actor_x_inds[i]]]
                 actor_y_ids += self.elites_map[keys[actor_y_inds[i]]]
 
-        all_actor_ids = list(zip(actor_x_ids, actor_y_ids))
+        all_actor_ids = np.array(list(zip(actor_x_ids, actor_y_ids))).reshape(-1, self.cfg['actors_batch_size'], 2).tolist()
         self.evolve_in_queue.put_many(all_actor_ids, block=True, timeout=1e9)
 
     def close_processes(self):
@@ -182,32 +183,37 @@ class VariationWorker(object):
             nvmlInit()  # track available gpu resources
 
         while not self._terminate:
-            actor_x_ids, actor_y_ids = self.evolve_in_queue.get_many(block=True, timeout=1e9)
-            actors_x_evo, actors_y_evo, actors_z = [], None, []
+            try:
+                actor_x_ids, actor_y_ids = list(zip(*self.evolve_in_queue.get(block=True, timeout=1e9)))
+                actor_x_ids, actor_y_ids = list(actor_x_ids), list(actor_y_ids)
+                if len(actor_x_ids) <= 5: continue  # TODO: find alternative to this hack
+                actors_x_evo, actors_y_evo, actors_z = [], None, []
 
-            actors_x_evo = self.all_actors[actor_x_ids]
-            actors_y_evo = self.all_actors[actor_y_ids] if actor_y_ids is not None else None
+                actors_x_evo = self.all_actors[actor_x_ids][:, 0]
+                actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
 
-            gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
-            device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
-            batch_actors_x = BatchMLP(actors_x_evo, device)
-            batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo else None
-            actors_z = self.evo(batch_actors_x, batch_actors_y, self.crossover_op, self.mutation_op)
+                gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
+                device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
+                batch_actors_x = BatchMLP(actors_x_evo, device)
+                batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
+                actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
 
-            # update the all_evolved_actors pool and send the keys to the evaluation workers
-            # synchronize access to eval_cache since different processes read and write to this
-            for idx, actor_z in zip(actor_x_ids, actors_z):
-                self.eval_cache_locks[idx].acquire()
-                self.eval_cache[idx] = actor_z
-                self.eval_cache_locks[idx].release()
+                # update the all_evolved_actors pool and send the keys to the evaluation workers
+                # synchronize access to eval_cache since different processes read and write to this
+                for idx, actor_z in zip(actor_x_ids, actors_z):
+                    self.eval_cache_locks[idx].acquire()
+                    self.eval_cache[idx] = actor_z
+                    self.eval_cache_locks[idx].release()
 
-            self.evolve_out_queue.put((self.eval_id, actor_x_ids), block=True, timeout=1e9)
-            self.eval_id += 1
+                self.evolve_out_queue.put((self.eval_id, actor_x_ids), block=True, timeout=1e9)
+                self.eval_id += 1
+            except BaseException:
+                pass
 
     def terminate(self):
         self._terminate = True
 
-    def evo(self, actor_x, actor_y, crossover_op=None, mutation_op=None):
+    def evo(self, actor_x, actor_y, device, crossover_op=None, mutation_op=None):
         '''
         evolve the agent parameters (in this case, a neural network) using crossover and mutation operators
         crossover needs 2 parents, thus actor_x and actor_y
@@ -222,13 +228,13 @@ class VariationWorker(object):
             actor_y_ids = actor_y.get_mlp_ids()
             actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
             actor_z.set_parent_id(which_parent=2, ids=actor_y_ids)
-            actor_z_state_dict = self.batch_crossover(actor_x.state_dict(), actor_y.state_dict(), crossover_op)
+            actor_z_state_dict = self.batch_crossover(actor_x.state_dict(), actor_y.state_dict(), crossover_op, device=device)
             if mutation_op:
-                actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
+                actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op, device=device)
         elif mutation_op:
             actor_x_ids = actor_x.get_mlp_ids()
             actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
-            actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
+            actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op, device=device)
 
         actor_z.load_state_dict(actor_z_state_dict)
         return actor_z.update_mlps()

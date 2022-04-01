@@ -14,7 +14,7 @@ from faster_fifo import Queue
 from utils.vectorized import ParallelEnv
 from utils.logger import log, config_wandb
 from wrappers.BDWrapper import BDWrapper
-from map_elites.cvt import compute_nn
+from map_elites.cvt import compute_ht
 from pynvml import *
 
 
@@ -108,15 +108,15 @@ def main():
     assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
            cfg['random_init_batch'] % cfg['actors_batch_size'] == 0, 'number of policies to evaluate during the init/eval phase must be a multiple of actors_batch_size'
     env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'])]
-    envs = ParallelEnv(
-        env_fns,
-        msgr_remote,
-        cfg['batch_size'],
-        cfg['seed'],
-        cfg['workers_per_gpu'],
-        cfg['actors_batch_size'],
-        cfg['num_gpus']
-    )
+    # envs = ParallelEnv(
+    #     env_fns,
+    #     msgr_remote,
+    #     cfg['batch_size'],
+    #     cfg['seed'],
+    #     cfg['workers_per_gpu'],
+    #     cfg['actors_batch_size'],
+    #     cfg['num_gpus']
+    # )
     # make folders
     if not os.path.exists(cfg['save_path']):
         os.mkdir(cfg['save_path'])
@@ -150,9 +150,18 @@ def main():
         num_var_workers = num_cores
 
 
-    compute_nn(cfg,
-               envs,
-               msgr_local,
+    # compute_nn(cfg,
+    #            envs,
+    #            msgr_local,
+    #            actors_file,
+    #            filename,
+    #            cfg['save_path'],
+    #            n_niches=cfg['n_niches'],
+    #            max_evals=cfg['max_evals'])
+
+    compute_ht(cfg,
+               env_fns,
+               num_var_workers,
                actors_file,
                filename,
                cfg['save_path'],

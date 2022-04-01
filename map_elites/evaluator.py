@@ -46,7 +46,7 @@ class Individual(object):
 
 class Evaluator(object):
     def __init__(self, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, seed, num_parallel,
-                 actors_per_worker, num_gpus, kdt, msgr_remote):
+                 actors_per_worker, num_gpus, kdt, msgr_remote, eval_in_queue):
         '''
         A class for parallel evaluations
         :param env_fns: 2d list of gym envs (num_processes x env_batch_size). Each worker gets a batch of envs to step through
@@ -58,7 +58,7 @@ class Evaluator(object):
         '''
         self.num_processes = num_parallel
         self.num_gpus = num_gpus
-        self.eval_in_queue = Queue(max_size_bytes=int(1e7))
+        self.eval_in_queue = eval_in_queue
         self.eval_out_queue = Queue(max_size_bytes=int(1e7))
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.num_processes)])
 
@@ -109,48 +109,52 @@ class EvalWorker(object):
             nvmlInit()  # for tracking available gpu resources
 
         # start the simulations
-        envs = [self.env_fn_wrappers.x[i]() for i in range(len(self.env_fn_wrappers.x))]
+        envs = [self.env_fn_wrappers[i]() for i in range(len(self.env_fn_wrappers))]
 
         # begin the process loop
         while not self._terminate:
-            eval_id, evolved_actor_keys = self.eval_in_queue.get(block=True, timeout=1e9)  # TODO: make sure this interface is implemented correctly
-            start_time = time.time()
-            actors = []
-            for key in evolved_actor_keys:
-                self.eval_cache_locks[key].acquire()
-                actors += [self.eval_cache[key]]
-                self.eval_cache_locks.release()
-            assert len(envs) % len(actors) == 0, 'Number of envs should be a multiple of the number of policies '
-            gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else None
-            device = torch.device(f'cuda:{gpu_id}' if (torch.cuda.is_available() and gpu_id is not None) else 'cpu')
-            batch_actors = BatchMLP(actors, device)
-            num_actors = len(actors)
-            for env in envs:
-                env.seed(int((self.master_seed * 100) * eval_id))
+            try:
+                eval_id, evolved_actor_keys = self.eval_in_queue.get(block=True, timeout=1e9)  # TODO: make sure this interface is implemented correctly
+                start_time = time.time()
+                actors = []
+                for key in evolved_actor_keys:
+                    self.eval_cache_locks[key].acquire()
+                    actors += [self.eval_cache[key]]
+                    self.eval_cache_locks[key].release()
+                assert len(envs) % len(actors) == 0, f'Number of envs should be a multiple of the number of policies. ' \
+                                                     f'Got {len(envs)} envs and {len(actors)} policies'
+                gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else None
+                device = torch.device(f'cuda:{gpu_id}' if (torch.cuda.is_available() and gpu_id is not None) else 'cpu')
+                batch_actors = BatchMLP(actors, device)
+                num_actors = len(actors)
+                for env in envs:
+                    env.seed(int((self.master_seed * 100) * eval_id))
 
-            obs = torch.from_numpy(np.array([env.reset() for env in envs])).reshape(num_actors, -1).to(actors[0].device)
-            rews = [0 for _ in range(num_actors)]
-            dones = [False for _ in range(num_actors)]
-            infos = [None for _ in range(num_actors)]
-            # get a batch of trajectories and rewards
-            while not all(dones):
-                obs_arr = []
-                with torch.no_grad():
-                    acts = batch_actors(obs).cpu().detach().numpy()
-                    for idx, (act, env) in enumerate(zip(acts, envs)):
-                        obs, rew, done, info = env.step(act)
-                        rews[idx] += rew
-                        obs_arr.append(obs)
-                        dones[idx] = done
-                        infos[idx] = info
-                    obs = torch.from_numpy(np.array(obs_arr)).reshape(num_actors, -1).to(actors[0].device)
-            ep_lengths = [env.ep_length for env in envs]
-            frames = sum(ep_lengths)
-            bds = [info['desc'] for info in infos]  # list of behavioral descriptors
-            res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
+                obs = torch.from_numpy(np.array([env.reset() for env in envs])).reshape(num_actors, -1).to(device)
+                rews = [0 for _ in range(num_actors)]
+                dones = [False for _ in range(num_actors)]
+                infos = [None for _ in range(num_actors)]
+                # get a batch of trajectories and rewards
+                while not all(dones):
+                    obs_arr = []
+                    with torch.no_grad():
+                        acts = batch_actors(obs).cpu().detach().numpy()
+                        for idx, (act, env) in enumerate(zip(acts, envs)):
+                            obs, rew, done, info = env.step(act)
+                            rews[idx] += rew
+                            obs_arr.append(obs)
+                            dones[idx] = done
+                            infos[idx] = info
+                        obs = torch.from_numpy(np.array(obs_arr)).reshape(num_actors, -1).to(device)
+                ep_lengths = [env.ep_length for env in envs]
+                frames = sum(ep_lengths)
+                bds = [info['desc'] for info in infos]  # list of behavioral descriptors
+                res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
 
-            runtime = time.time() - start_time
-            self._map_agents(actors, bds, rews, runtime, frames)
+                runtime = time.time() - start_time
+                self._map_agents(actors, bds, rews, runtime, frames)
+            except BaseException:
+                pass
 
         for env in envs:
             env.close()
@@ -199,7 +203,7 @@ class EvalWorker(object):
         If an agent maps to a new cell in the elites map, need to give it a new, unused id from the pool of agents
         :returns an agent id that's not being used by some other agent in the elites map
         '''
-        return next(i for i in range(len(self.eval_cache)) if self.eval_cache[i][1] == UNUSED)
+        return next(i for i in range(len(self.all_actors)) if self.all_actors[i][1] == UNUSED)
 
 
 
