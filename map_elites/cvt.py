@@ -59,6 +59,7 @@ from map_elites import common as cm
 from utils.logger import log, config_wandb
 from utils.utils import *
 
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 # flags for the archive
 UNUSED = 0
