@@ -91,6 +91,7 @@ class Evaluator(object):
                                      self.remotes[process_id],
                                      kdt,
                                      msgr_remote) for process_id, env_fn in enumerate(env_fns)]
+        log.debug(f'Spinning up {len(self.processes)} evaluation workers')
 
     @property
     def report_interval(self):
