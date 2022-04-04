@@ -51,7 +51,7 @@ import torch.multiprocessing as multiprocessing
 from sklearn.neighbors import KDTree
 from models.bipedal_walker_model import model_factory
 from faster_fifo import Queue
-from map_elites.variation2 import VariationOperator
+from map_elites.variation import VariationOperator
 from map_elites.evaluator import Evaluator, Individual
 from torch.multiprocessing import Process as TorchProcess, Pipe
 from memory_profiler import *
@@ -102,8 +102,6 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
     kdt = KDTree(cluster_centers, leaf_size=30, metric='euclidean')
     cm.__write_centroids(cluster_centers)
 
-    # variation workers will put the evolved policies in here for the evaluation workers to process
-    all_evolved_actors = [copy.deepcopy(model) for model in all_actors]
 
     # create the map of elites
     elites_map = manager.dict()
@@ -226,170 +224,5 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
     variation_op.close_processes()
     evaluator.close_envs()
 
-
-
-
-
-
-# # map-elites algorithm (CVT variant)
-# def compute_nn(cfg,
-#                envs,
-#                msgr_local,
-#                actors_file,
-#                filename,
-#                save_path,
-#                n_niches=1000,
-#                max_evals=1e5):
-#     """CVT MAP-Elites
-#        Vassiliades V, Chatzilygeroudis K, Mouret JB. Using centroidal voronoi tessellations to scale up the multidimensional archive of phenotypic elites algorithm. IEEE Transactions on Evolutionary Computation. 2017 Aug 3;22(4):623-30.
-#
-#        Format of the logfile: evals archive_size max mean median 5%_percentile, 95%_percentile
-#         dim_map: dimensionality of the map. Ex. % time contact w/ ground of 4 legs = 4 dims, etc
-#         dim_x: dimensionality of the behavior descriptor
-#         f: the environment which returns a fitness and behavior descriptor
-#     """
-#
-#     # get process num_workers input
-#     num_cores = multiprocessing.cpu_count()
-#     num_workers = cfg['num_workers']
-#     if num_workers == -1: num_workers = num_cores
-#     assert num_workers <= num_cores, '--num_workers must be less than or equal to the number of cores on your machine. Multiple workers per cpu are currently not supported'
-#     cfg['num_workers'] = num_workers  # for printing the cfg vars
-#
-#     # same thing with variation workers
-#     num_var_workers = cfg['num_variation_workers']
-#     if num_var_workers == -1:
-#         cfg['num_variation_workers'] = num_cores
-#         num_var_workers = num_cores
-#
-#     num_gpus = cfg['num_gpus']
-#     evals_per_gpu = 5  # number of parallel evaluations per gpu
-#
-#     # create the CVT
-#     cluster_centers = cm.cvt(n_niches, cfg['dim_map'],
-#                              cfg['cvt_samples'], cfg['cvt_use_cache'])
-#     kdt = KDTree(cluster_centers, leaf_size=30, metric='euclidean')
-#     cm.__write_centroids(cluster_centers)
-#
-#     archive = {}  # init archive (empty)
-#     n_evals = 0  # number of evaluations since the beginning
-#     b_evals = 0  # number evaluation since the last dump
-#     cp_evals = 0 # number of evaluations since last checkpoint dump
-#     steps = 0  # env steps
-#     gpu_id = 0
-#
-#     var_in_queue = Queue(max_size_bytes=int(1e7))
-#     to_evaluate_pool = Queue(max_size_bytes=int(1e7))
-#
-#     # initialize the variation operator (that performs crossovers/mutations)
-#     variation_op = VariationOperator(cfg,
-#                                      var_in_queue=var_in_queue,
-#                                      var_out_queue=to_evaluate_pool,
-#                                      num_cpu=num_var_workers,
-#                                      num_gpu=cfg['num_gpus'],
-#                                      crossover_op=cfg['crossover_op'],
-#                                      mutation_op=cfg['mutation_op'],
-#                                      max_gene=cfg['max_genotype'],
-#                                      min_gene=cfg['min_genotype'],
-#                                      mutation_rate=cfg['mutation_rate'],
-#                                      crossover_rate=cfg['crossover_rate'],
-#                                      eta_m=cfg['eta_m'],
-#                                      eta_c=cfg['eta_c'],
-#                                      sigma=cfg['sigma'],
-#                                      max_uniform=cfg['max_uniform'],
-#                                      iso_sigma=cfg['iso_sigma'],
-#                                      line_sigma=cfg['line_sigma'])
-#
-#     variation_op.init_archive()
-#
-#     # main loop
-#     try:
-#         while (n_evals < max_evals):
-#             start_time = time.time()
-#             to_evaluate = []
-#             # random initialization
-#             if len(archive) <= cfg['random_init']:  # initialize a |random_init| number of actors
-#                 log.debug("Initializing the neural network actors' weights from scratch")
-#                 for i in range(0, cfg['random_init_batch']):
-#                     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
-#                     actor = model_factory(hidden_size=128, device=device).to(device)
-#                     to_evaluate += [actor]
-#                     if cfg['num_gpus']:
-#                         log.debug(f'New actor going to gpu {gpu_id}')
-#                         gpu_id = (gpu_id + 1) % num_gpus
-#             else:  # variation/selection loop
-#                 log.debug("Selection/Variation loop of existing actors")
-#                 # copy and add variation
-#                 while len(to_evaluate) < 50:
-#                     try:
-#                         pass
-#                         # to_evaluate += eval_pool.get_many_nowait()
-#                     except BaseException:
-#                         pass
-#
-#             log.debug(f"Evaluating {len(to_evaluate)} policies")
-#
-#             # evaluations of the fitness and BD of new batch
-#             solutions = envs.batch_eval_policies(to_evaluate[:50])
-#             frames = sum(sol[1] for sol in solutions)
-#             steps += frames
-#
-#             n_evals += len(to_evaluate)
-#             b_evals += len(to_evaluate)
-#             cp_evals += len(to_evaluate)
-#             log.debug(f'{n_evals/int(cfg["max_evals"])}')
-#             # add to archive
-#             for idx, solution in enumerate(solutions):
-#                 # TODO: need to check for if robot is alive?
-#                 agent = Individual(genotype=to_evaluate[idx], phenotype=solution[2], fitness=solution[0])
-#                 added = __add_to_archive(agent, agent.phenotype, archive, kdt)
-#                 if added:
-#                     actors_file.write("{} {} {} {} {} {} {} {} {} {}\n".format(n_evals,
-#                                                                            agent.genotype.id,
-#                                                                            agent.fitness,
-#                                                                            str(agent.phenotype).strip("[]"),
-#                                                                            str(agent.centroid).strip("()"),
-#                                                                            agent.genotype.parent_1_id,
-#                                                                            agent.genotype.parent_2_id,
-#                                                                            agent.genotype.type,
-#                                                                            agent.genotype.novel,
-#                                                                            agent.genotype.delta_f))
-#                     actors_file.flush()
-#
-#             # maybe save a checkpoint
-#             if cp_evals >= cfg['cp_save_period'] and cfg['cp_save_period'] != -1:
-#                 save_checkpoint(archive, n_evals, filename, cfg['checkpoint_dir'], cfg)
-#                 while len(get_checkpoints(cfg['checkpoint_dir'])) > cfg['keep_checkpoints']:
-#                     oldest_checkpoint = get_checkpoints(cfg['checkpoint_dir'])[0]
-#                     if os.path.exists(oldest_checkpoint):
-#                         log.debug('Removing %s', oldest_checkpoint)
-#                         shutil.rmtree(oldest_checkpoint)
-#                 cp_evals = 0
-#
-#             eps = round(len(to_evaluate) / (time.time() - start_time), 1)
-#             fps = round(frames / (time.time() - start_time), 1)
-#
-#             # logging
-#             fit_list = np.array([x.fitness for x in archive.values()])
-#             # write log
-#             log.info(f'n_evals: {n_evals}, mean fitness: {np.mean(fit_list)}, median fitness: {np.median(fit_list)}, \
-#                 5th percentile: {np.percentile(fit_list, 5)}, 95th percentile: {np.percentile(fit_list, 95)}')
-#             log.debug(f'Evals/sec (EPS): {eps}, FPS: {fps}, steps: {steps}')
-#             wandb.log({
-#                 "evals": n_evals,
-#                 "mean fitness": np.mean(fit_list),
-#                 "median fitness": np.median(fit_list),
-#                 "5th percentile": np.percentile(fit_list, 5),
-#                 "95th percentile": np.percentile(fit_list, 95),
-#                 "evals/sec (Eps)": eps,
-#                 "fps": fps,
-#                 "env steps": steps
-#             })
-#     except KeyboardInterrupt:
-#         log.debug('Keyboard interrupt detected. Saving final results')
-#
-#     cm.save_archive(archive, n_evals, filename, save_path, save_models=True)
-#     save_cfg(cfg, save_path)
-#     envs.close()
 
 

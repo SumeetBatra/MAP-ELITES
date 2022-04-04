@@ -120,7 +120,7 @@ class VariationOperator(object):
         '''
         Get new batch of agents to evolve
         '''
-        batch_size = int(self.cfg['batch_size'] * self.cfg['proportion_evo'])
+        batch_size = int(self.cfg['eval_batch_size'] * self.cfg['proportion_evo'])
         # log.debug(f'Evolving a new batch of {batch_size} policies')
         keys = list(self.elites_map.keys())
         actor_x_ids = []

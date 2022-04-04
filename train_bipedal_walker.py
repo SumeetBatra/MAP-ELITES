@@ -43,10 +43,10 @@ def parse_args(argv=None):
     parser.add_argument('--max_evals', type=int, default=1e6, help='Total number of evaluations to perform')
     parser.add_argument('--save_path', default='./results', type=str, help='path where to save results')
     parser.add_argument('--dim_map', default=2, type=int, help='Dimensionality of the behavior space. Default is 2 for bipedal walker (obviously)')
-    parser.add_argument('--save_period', default=10000, type=int, help='How many evaluations b/w saving archives')
+    parser.add_argument('--save_period', default=500, type=int, help='How many evaluations b/w saving archives')
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
-    parser.add_argument('--cp_save_period', default=5000, type=int, help='How many evaluations b/w saving checkpoints')
+    parser.add_argument('--cp_save_period', default=500, type=int, help='How many evaluations b/w saving checkpoints')
     parser.add_argument('--use_wandb', default=True, type=str2bool, help='log results to weights and biases')
 
     # args for parallelization
@@ -102,21 +102,16 @@ def main():
     if cfg['use_wandb']:
         config_wandb(batch_size=cfg['batch_size'], max_evals=cfg['max_evals'])
 
-    msgr_local, msgr_remote = Pipe()
 
     # set up factory function to launch parallel environments
     assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
            cfg['random_init_batch'] % cfg['actors_batch_size'] == 0, 'number of policies to evaluate during the init/eval phase must be a multiple of actors_batch_size'
-    env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'])]
-    # envs = ParallelEnv(
-    #     env_fns,
-    #     msgr_remote,
-    #     cfg['batch_size'],
-    #     cfg['seed'],
-    #     cfg['workers_per_gpu'],
-    #     cfg['actors_batch_size'],
-    #     cfg['num_gpus']
-    # )
+
+    if num_gpus > 1:
+        env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'] * num_gpus)]
+    else:
+        env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'])]
+
     # make folders
     if not os.path.exists(cfg['save_path']):
         os.mkdir(cfg['save_path'])
@@ -148,16 +143,6 @@ def main():
     if num_var_workers == -1:
         cfg['num_variation_workers'] = num_cores
         num_var_workers = num_cores
-
-
-    # compute_nn(cfg,
-    #            envs,
-    #            msgr_local,
-    #            actors_file,
-    #            filename,
-    #            cfg['save_path'],
-    #            n_niches=cfg['n_niches'],
-    #            max_evals=cfg['max_evals'])
 
     compute_ht(cfg,
                env_fns,

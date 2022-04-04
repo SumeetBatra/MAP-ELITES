@@ -182,7 +182,7 @@ class EvalWorker(object):
                 ep_lengths = [env.ep_length for env in envs]
                 frames = sum(ep_lengths)
                 bds = [info['desc'] for info in infos]  # list of behavioral descriptors
-                res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
+                # res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
 
                 runtime = time.time() - start_time
                 self._map_agents(actors, bds, rews, runtime, frames)
