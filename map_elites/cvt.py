@@ -54,7 +54,6 @@ from faster_fifo import Queue
 from map_elites.variation import VariationOperator
 from map_elites.evaluator import Evaluator, Individual
 from torch.multiprocessing import Process as TorchProcess, Pipe
-from memory_profiler import *
 
 from map_elites import common as cm
 from utils.logger import log, config_wandb
