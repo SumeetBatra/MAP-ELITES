@@ -26,7 +26,7 @@ MAPPED = 1
 class Individual(object):
     _ids = count(0)
 
-    def __init__(self, genotype, phenotype, fitness, centroid=None):
+    def __init__(self, genotype, parent_1_id, parent_2_id, genotype_type, genotype_novel, genotype_delta_f, phenotype, fitness, centroid=None):
         """
         A single agent
         param genotype:  The parameters that produced the behavior. I.e. neural network, etc.
@@ -34,14 +34,22 @@ class Individual(object):
         param fitness: the fitness of the model. In the case of a neural network, this is the total accumulated rewards
         param centroid: the closest CVT generator (a behavior) to the behavior that this individual exhibits
         """
-        genotype.id = next(self._ids)
-        Individual.current_id = genotype.id  # TODO: not sure what this is for
         self.genotype = genotype
+        self.genotype_id = self.get_next_id()
+        self.parent_1_id = parent_1_id
+        self.parent_2_id = parent_2_id
+        self.genotype_type = genotype_type
+        self.genotype_novel = genotype_novel
+        self.genotype_delta_f = genotype_delta_f
         self.phenotype = phenotype
         self.fitness = fitness
         self.centroid = centroid
         self.novelty = None
 
+    def get_next_id(self):
+        next_id = next(self._ids)
+        Individual.current_id = next_id  # TODO: not sure what this is for
+        return next_id
 
 
 class Evaluator(object):
@@ -186,11 +194,10 @@ class EvalWorker(object):
 
                 runtime = time.time() - start_time
                 # free up gpu memory
-                cpu_device = torch.device('cpu')
                 del batch_actors
                 torch.cuda.empty_cache()
 
-                self._map_agents(actors, bds, rews, runtime, frames)
+                self._map_agents(actors, evolved_actor_keys, bds, rews, runtime, frames)
             except BaseException:
                 pass
 
@@ -200,16 +207,18 @@ class EvalWorker(object):
     def terminate(self):
         self._terminate = True
 
-    def _map_agents(self, actors, descs, rews, runtime, frames):
+    def _map_agents(self, actors, actor_keys, descs, rews, runtime, frames):
         '''
         Map the evaluated agents using their behavior descriptors. Send the metadata back to the main process for logging
         :param behav_descs: behavior descriptors of a batch of evaluated agents
         :param rews: fitness scores of a batch of evaluated agents
         '''
         metadata = []
-        for actor, desc, rew in zip(actors, descs, rews):
+        for actor, actor_key, desc, rew in zip(actors, actor_keys, descs, rews):
             added = False
-            agent = Individual(genotype=actor, phenotype=desc, fitness=rew)
+            agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
+                               genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f, phenotype=desc, fitness=rew)
+            actor.id = agent.get_next_id()
             niche_index = self.kdt.query([desc], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
             niche = self.kdt.data[niche_index]
             n = cm.make_hashable(niche)
@@ -230,8 +239,8 @@ class EvalWorker(object):
                 added = True
 
             if added:
-                md = (agent.genotype.id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
-                      agent.genotype.parent_1_id, agent.genotype.parent_2_id, agent.genotype.type, agent.genotype.novel, agent.genotype.delta_f)
+                md = (agent.genotype_id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
+                      agent.parent_1_id, agent.parent_2_id, agent.genotype_type, agent.genotype_novel, agent.genotype_delta_f)
                 metadata.append(md)
 
         self.msgr_remote.send((metadata, runtime, frames))
