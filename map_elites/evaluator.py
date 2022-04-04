@@ -185,6 +185,11 @@ class EvalWorker(object):
                 # res = [[rew, ep_len, bd] for rew, ep_len, bd in zip(rews, ep_lengths, bds)]
 
                 runtime = time.time() - start_time
+                # free up gpu memory
+                cpu_device = torch.device('cpu')
+                del batch_actors
+                torch.cuda.empty_cache()
+
                 self._map_agents(actors, bds, rews, runtime, frames)
             except BaseException:
                 pass

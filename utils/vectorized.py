@@ -246,6 +246,11 @@ class BatchMLP(nn.Module):
                 self.mlps[j].layers[2 * i].bias.data = layer.bias[i].clone()
         return self.mlps
 
+    def to_device(self, device):
+        self.to(device)
+        for i in range(len(self.mlps)):
+            self.mlps[i].to(device)
+
 
 class CloudpickleWrapper(object):
     """

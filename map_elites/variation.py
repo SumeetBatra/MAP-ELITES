@@ -160,8 +160,8 @@ class VariationWorker(object):
         self.evo_cfg = evo_cfg  # hyperparameters for evolution
         self.eval_id = 0
 
-        log.debug(f'Mutation operator: {evo_cfg["mutation_op"]}')
-        log.debug(f'Crossover operator: {evo_cfg["crossover_op"]}')
+        log.debug(f'[var worker {process_id}] Mutation operator: {evo_cfg["mutation_op"]}')
+        log.debug(f'[var worker {process_id}] Crossover operator: {evo_cfg["crossover_op"]}')
 
         if evo_cfg['crossover_op'] in ["sbx", "iso_dd"]:
             self.crossover_op = getattr(self, evo_cfg['crossover_op'])
@@ -207,6 +207,12 @@ class VariationWorker(object):
 
                 self.evolve_out_queue.put((self.eval_id, actor_x_ids), block=True, timeout=1e9)
                 self.eval_id += 1
+
+                # free up gpu memory
+                cpu_device = torch.device('cpu')
+                del batch_actors_x
+                del batch_actors_y
+                torch.cuda.empty_cache()
             except BaseException:
                 pass
 
