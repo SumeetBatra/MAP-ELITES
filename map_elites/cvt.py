@@ -189,12 +189,7 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
                         5th percentile: {np.percentile(fit_list, 5)}, 95th percentile: {np.percentile(fit_list, 95)}')
 
 
-                # logging
-                eps = round(evals / runtime, 1)
-                fps = round(frames / runtime, 1)
                 fit_list = np.array(fit_list)
-                log.debug(f'Evals/sec (EPS): {eps}, FPS: {fps}, steps: {steps}')
-
                 if cfg['use_wandb']:
                     wandb.log({
                         "evals": n_evals,
@@ -202,9 +197,15 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
                         "median fitness": np.median(fit_list),
                         "5th percentile": np.percentile(fit_list, 5),
                         "95th percentile": np.percentile(fit_list, 95),
-                        "evals/sec (Eps)": eps,
-                        "fps": fps,
                         "env steps": steps
+                    })
+
+            if time.time() - evaluator.last_report >= evaluator.report_interval:
+                fps, eps = evaluator.report_evals(total_env_steps=steps, total_evals=n_evals)
+                if cfg['use_wandb']:
+                    wandb.log({
+                        "evals/sec (EPS)": eps,
+                        "fps": fps
                     })
 
             # maybe save a checkpoint

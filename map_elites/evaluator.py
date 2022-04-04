@@ -9,8 +9,8 @@ from torch.multiprocessing import Event, Pipe, Process as TorchProcess
 from utils.vectorized import BatchMLP
 from map_elites import common as cm
 from itertools import count
+from collections import deque
 
-from torch import Tensor
 
 from utils.logger import log
 from utils.utils import get_least_busy_gpu
@@ -62,6 +62,12 @@ class Evaluator(object):
         self.eval_out_queue = Queue(max_size_bytes=int(1e7))
         self.remotes, self.locals = zip(*[Pipe() for _ in range(self.num_processes)])
 
+        # logging variables
+        self.avg_stats_intervals = (2, 12, 60)  # 10 seconds, 1 minute, 5 minutes
+        self._report_interval = 5.0  # report every 5 seconds
+        self._last_report = 0.0
+        self.eval_stats = deque([], maxlen=max(self.avg_stats_intervals))
+
         self.processes = [EvalWorker(process_id,
                                      env_fn,
                                      all_actors,
@@ -78,9 +84,36 @@ class Evaluator(object):
                                      kdt,
                                      msgr_remote) for process_id, env_fn in enumerate(env_fns)]
 
+    @property
+    def report_interval(self):
+        return self._report_interval
+
+    @property
+    def last_report(self):
+        return self._last_report
+
     def close_envs(self):
         for process in self.processes:
             process.terminate()
+
+    def report_evals(self, total_env_steps, total_evals):
+        now = time.time()
+        self.eval_stats.append((now, total_env_steps, total_evals))
+        if len(self.eval_stats) <= 1: return 0.0, 0.0
+
+        fps, eps = [], []
+        for avg_interval in self.avg_stats_intervals:
+            past_time, past_frames, past_evals = self.eval_stats[max(0, len(self.eval_stats) - 1 - avg_interval)]
+            fps.append(round((total_env_steps - past_frames) / (now - past_time), 1))
+            eps.append(round((total_evals - past_evals) / (now - past_time), 1))
+
+        log.debug(f'Evals/sec (EPS) 10 sec: {eps[0]}, 60 sec: {eps[1]}, 300 sec: {eps[2]}, '
+                  f'FPS 10 sec: {fps[0]}, 60 sec: {fps[1]}, 300 sec: {fps[2]}')
+
+        self._last_report = now
+        return fps[2], eps[2]
+
+
 
 class EvalWorker(object):
     def __init__(self, process_id, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, master_seed,
@@ -141,7 +174,7 @@ class EvalWorker(object):
                         acts = batch_actors(obs).cpu().detach().numpy()
                         for idx, (act, env) in enumerate(zip(acts, envs)):
                             obs, rew, done, info = env.step(act)
-                            rews[idx] += rew
+                            rews[idx] += rew * (1 - dones[idx])
                             obs_arr.append(obs)
                             dones[idx] = done
                             infos[idx] = info
