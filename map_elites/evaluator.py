@@ -56,7 +56,7 @@ class Evaluator(object):
         :param actors_per_worker:
         :param num_gpus:
         '''
-        self.num_processes = num_parallel
+        self.num_processes = num_parallel * num_gpus if num_gpus > 1 else num_parallel
         self.num_gpus = num_gpus
         self.eval_in_queue = eval_in_queue
         self.eval_out_queue = Queue(max_size_bytes=int(1e7))
