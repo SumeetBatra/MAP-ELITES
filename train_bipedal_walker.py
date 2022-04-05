@@ -11,7 +11,6 @@ import numpy as np
 
 from multiprocessing import Pipe
 from faster_fifo import Queue
-from utils.vectorized import ParallelEnv
 from utils.logger import log, config_wandb
 from wrappers.BDWrapper import BDWrapper
 from map_elites.cvt import compute_ht
@@ -99,8 +98,6 @@ def main():
     cfg = vars(args)
 
     num_gpus = cfg['num_gpus']
-    if num_gpus:
-        nvmlInit()  # for tracking gpu resources
 
     # log hyperparams to wandb
     if cfg['use_wandb']:

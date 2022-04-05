@@ -177,8 +177,6 @@ class VariationWorker(object):
         self.process.start()
 
     def _run(self):
-        if self.num_gpus:
-            nvmlInit()  # track available gpu resources
 
         while not self._terminate:
             try:
@@ -236,11 +234,11 @@ class VariationWorker(object):
             actor_z.set_parent_id(which_parent=2, ids=actor_y_ids)
             actor_z_state_dict = self.batch_crossover(actor_x.state_dict(), actor_y.state_dict(), crossover_op, device=device)
             if mutation_op:
-                actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op, device=device)
+                actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
         elif mutation_op:
             actor_x_ids = actor_x.get_mlp_ids()
             actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
-            actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op, device=device)
+            actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
 
         actor_z.load_state_dict(actor_z_state_dict)
         return actor_z.update_mlps()
@@ -258,7 +256,7 @@ class VariationWorker(object):
         return batch_z_state_dict
 
 
-    def batch_mutation(self, batch_x_state_dict, mutation_op, device):
+    def batch_mutation(self, batch_x_state_dict, mutation_op):
         y = copy.deepcopy(batch_x_state_dict)
         for tensor in batch_x_state_dict:
             if 'weight' or 'bias' in tensor:

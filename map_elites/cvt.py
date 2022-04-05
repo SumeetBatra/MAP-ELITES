@@ -164,8 +164,7 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
             variation_op.evolve_new_batch()
 
             if msgr_local.poll():
-                metadata, runtime, frames = msgr_local.recv()
-                evals = len(metadata)
+                metadata, runtime, frames, evals = msgr_local.recv()
                 n_evals += evals
                 cp_evals += evals
                 steps += frames

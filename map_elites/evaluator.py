@@ -175,8 +175,6 @@ class EvalWorker(object):
         self.process.start()
 
     def _run(self):
-        if self.num_gpus:
-            nvmlInit()  # for tracking available gpu resources
 
         # start the simulations
         envs = [self.env_fn_wrappers[i]() for i in range(len(self.env_fn_wrappers))]
@@ -226,8 +224,8 @@ class EvalWorker(object):
                 batch_actors.to_device(cpu_device)  # recursively puts all tensors to the cpu, including the mlps stored in the BatchMlp object
                 del batch_actors
                 torch.cuda.empty_cache()
-
                 self._map_agents(actors, evolved_actor_keys, bds, rews, runtime, frames)
+                log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
             except BaseException:
                 pass
 
@@ -244,6 +242,7 @@ class EvalWorker(object):
         :param rews: fitness scores of a batch of evaluated agents
         '''
         metadata = []
+        evals = len(actors)
         for actor, actor_key, desc, rew in zip(actors, actor_keys, descs, rews):
             added = False
             agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
@@ -275,7 +274,7 @@ class EvalWorker(object):
                       agent.parent_1_id, agent.parent_2_id, agent.genotype_type, agent.genotype_novel, agent.genotype_delta_f)
                 metadata.append(agent)
 
-        self.msgr_remote.send((metadata, runtime, frames))
+        self.msgr_remote.send((metadata, runtime, frames, evals))
 
     def _find_available_agent_id(self):
         '''
