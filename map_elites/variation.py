@@ -184,35 +184,38 @@ class VariationWorker(object):
 
         while not self._terminate:
             try:
-                actor_x_ids, actor_y_ids = list(zip(*self.evolve_in_queue.get(block=True, timeout=1e9)))
-                actor_x_ids, actor_y_ids = list(actor_x_ids), list(actor_y_ids)
-                if len(actor_x_ids) <= 5: continue  # TODO: find alternative to this hack
-                actors_x_evo, actors_y_evo, actors_z = [], None, []
+                with torch.no_grad():
+                    actor_x_ids, actor_y_ids = list(zip(*self.evolve_in_queue.get(block=True, timeout=1e9)))
+                    actor_x_ids, actor_y_ids = list(actor_x_ids), list(actor_y_ids)
+                    if len(actor_x_ids) <= 5: continue  # TODO: find alternative to this hack
+                    actors_x_evo, actors_y_evo, actors_z = [], None, []
 
-                actors_x_evo = self.all_actors[actor_x_ids][:, 0]
-                actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
+                    actors_x_evo = self.all_actors[actor_x_ids][:, 0]
+                    actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
 
-                gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
-                device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
-                batch_actors_x = BatchMLP(actors_x_evo, device)
-                batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
-                actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
+                    gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
+                    device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
+                    batch_actors_x = BatchMLP(actors_x_evo, device)
+                    batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
+                    actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
 
-                # update the all_evolved_actors pool and send the keys to the evaluation workers
-                # synchronize access to eval_cache since different processes read and write to this
-                for idx, actor_z in zip(actor_x_ids, actors_z):
-                    self.eval_cache_locks[idx].acquire()
-                    self.eval_cache[idx] = actor_z
-                    self.eval_cache_locks[idx].release()
+                    # update the all_evolved_actors pool and send the keys to the evaluation workers
+                    # synchronize access to eval_cache since different processes read and write to this
+                    for idx, actor_z in zip(actor_x_ids, actors_z):
+                        self.eval_cache_locks[idx].acquire()
+                        self.eval_cache[idx] = actor_z
+                        self.eval_cache_locks[idx].release()
 
-                self.evolve_out_queue.put((self.eval_id, actor_x_ids), block=True, timeout=1e9)
-                self.eval_id += 1
+                    self.evolve_out_queue.put((self.eval_id, actor_x_ids), block=True, timeout=1e9)
+                    self.eval_id += 1
 
-                # free up gpu memory
-                cpu_device = torch.device('cpu')
-                del batch_actors_x
-                del batch_actors_y
-                torch.cuda.empty_cache()
+                    # free up gpu memory
+                    cpu_device = torch.device('cpu')
+                    batch_actors_x.to_device(cpu_device)
+                    batch_actors_y.to_device(cpu_device)
+                    del batch_actors_x
+                    del batch_actors_y
+                    torch.cuda.empty_cache()
             except BaseException:
                 pass
 

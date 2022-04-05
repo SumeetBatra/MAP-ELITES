@@ -91,7 +91,7 @@ class Evaluator(object):
                                      self.remotes[process_id],
                                      kdt,
                                      msgr_remote) for process_id, env_fn in enumerate(env_fns)]
-        log.debug(f'Spinning up {len(self.processes)} evaluation workers')
+        log.debug(f'Spun up {len(self.processes)} evaluation workers')
 
     @property
     def report_interval(self):
@@ -195,6 +195,8 @@ class EvalWorker(object):
 
                 runtime = time.time() - start_time
                 # free up gpu memory
+                cpu_device = torch.device('cpu')
+                batch_actors.to_device(cpu_device)  # recursively puts all tensors to the cpu, including the mlps stored in the BatchMlp object
                 del batch_actors
                 torch.cuda.empty_cache()
 

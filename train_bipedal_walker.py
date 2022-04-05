@@ -91,6 +91,10 @@ def main():
     except RuntimeError:
         log.error("Cannot set mp start method to 'spawn'")
 
+    # improve gpu memory usage
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.enabled = True
+
     args = parse_args()
     cfg = vars(args)
 
