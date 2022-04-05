@@ -13,7 +13,6 @@ from collections import deque
 
 
 from utils.logger import log
-from utils.utils import get_least_busy_gpu
 from pynvml import *
 
 
@@ -53,7 +52,7 @@ class Individual(object):
 
 
 class Evaluator(object):
-    def __init__(self, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, seed, num_parallel,
+    def __init__(self, all_env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, seed, num_parallel,
                  actors_per_worker, num_gpus, kdt, msgr_remote, eval_in_queue):
         '''
         A class for parallel evaluations
@@ -76,7 +75,14 @@ class Evaluator(object):
         self._last_report = 0.0
         self.eval_stats = deque([], maxlen=max(self.avg_stats_intervals))
 
-        self.processes = [EvalWorker(process_id,
+        self.processes = []
+        if num_gpus >= 1:
+            process_id = 0
+            for gpu_id in range(num_gpus):
+                env_fns = all_env_fns[gpu_id]
+                for env_fn in env_fns:
+                    worker = EvalWorker(process_id,
+                                     gpu_id,
                                      env_fn,
                                      all_actors,
                                      eval_cache,
@@ -90,7 +96,26 @@ class Evaluator(object):
                                      self.eval_out_queue,
                                      self.remotes[process_id],
                                      kdt,
-                                     msgr_remote) for process_id, env_fn in enumerate(env_fns)]
+                                     msgr_remote)
+                    self.processes.append(worker)
+                    process_id += 1
+        else:
+            self.processes = [EvalWorker(process_id,
+                                         -1,
+                                         env_fn,
+                                         all_actors,
+                                         eval_cache,
+                                         eval_cache_locks,
+                                         elites_map,
+                                         batch_size,
+                                         seed,
+                                         actors_per_worker,
+                                         num_gpus,
+                                         self.eval_in_queue,
+                                         self.eval_out_queue,
+                                         self.remotes[process_id],
+                                         kdt,
+                                         msgr_remote) for process_id, env_fn in enumerate(all_env_fns)]
         log.debug(f'Spun up {len(self.processes)} evaluation workers')
 
     @property
@@ -125,8 +150,10 @@ class Evaluator(object):
 
 
 class EvalWorker(object):
-    def __init__(self, process_id, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, master_seed,
+    def __init__(self, process_id, gpu_id, env_fns, all_actors, eval_cache, eval_cache_locks, elites_map, batch_size, master_seed,
                  actors_per_worker, num_gpus, eval_in_queue, eval_out_queue, remote, kdt, msgr_remote):
+        self.process_id = process_id
+        self.gpu_id = gpu_id
         self.env_fn_wrappers = env_fns
         self.all_actors = all_actors
         self.eval_cache = eval_cache
@@ -144,6 +171,7 @@ class EvalWorker(object):
         self.kdt = kdt  # centroidal voronoi tessalations
 
         self.process = TorchProcess(target=self._run, daemon=True)
+        log.debug(f'Spinning up evaluation worker {self.process_id}')
         self.process.start()
 
     def _run(self):
@@ -165,8 +193,7 @@ class EvalWorker(object):
                     self.eval_cache_locks[key].release()
                 assert len(envs) % len(actors) == 0, f'Number of envs should be a multiple of the number of policies. ' \
                                                      f'Got {len(envs)} envs and {len(actors)} policies'
-                gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else None
-                device = torch.device(f'cuda:{gpu_id}' if (torch.cuda.is_available() and gpu_id is not None) else 'cpu')
+                device = torch.device(f'cuda:{self.gpu_id}' if (torch.cuda.is_available() and self.gpu_id is not None) else 'cpu')
                 batch_actors = BatchMLP(actors, device)
                 num_actors = len(actors)
                 for env in envs:

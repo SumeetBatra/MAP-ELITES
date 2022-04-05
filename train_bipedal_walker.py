@@ -51,7 +51,7 @@ def parse_args(argv=None):
 
     # args for parallelization
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
-    parser.add_argument('--workers_per_gpu', default=5, type=int, help='How many policy evaluators to run in parallel per gpu (different from number of policies to create a BatchMLP)')
+    parser.add_argument('--eval_workers_per_gpu', default=5, type=int, help='How many policy evaluators to run in parallel per gpu (different from number of policies to create a BatchMLP)')
     parser.add_argument('--actors_batch_size', default=10, type=int, help='Number of policies used to create a BatchMLP')
     parser.add_argument('--num_variation_workers', default=-1, type=int, help='Number of parallel processes performing crossover/mutation')
 
@@ -111,10 +111,10 @@ def main():
     assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
            cfg['random_init_batch'] % cfg['actors_batch_size'] == 0, 'number of policies to evaluate during the init/eval phase must be a multiple of actors_batch_size'
 
-    if num_gpus > 1:
-        env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'] * num_gpus)]
+    if num_gpus >= 1:
+        env_fns = [[[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['eval_workers_per_gpu'])] for _ in range(num_gpus)]
     else:
-        env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['workers_per_gpu'])]
+        env_fns = [[partial(make_env) for _ in range(cfg['actors_batch_size'])] for _ in range(cfg['eval_workers_per_gpu'])]
 
     # make folders
     if not os.path.exists(cfg['save_path']):

@@ -19,7 +19,6 @@ from models.bipedal_walker_model import BipedalWalkerNN, model_factory
 from torch.multiprocessing import Process as TorchProcess, Pipe, Event
 from functools import partial
 from pynvml import *
-from utils.utils import get_least_busy_gpu
 from utils.vectorized import BatchMLP
 
 
@@ -160,8 +159,7 @@ class VariationWorker(object):
         self.evo_cfg = evo_cfg  # hyperparameters for evolution
         self.eval_id = 0
 
-        log.debug(f'[var worker {process_id}] Mutation operator: {evo_cfg["mutation_op"]}')
-        log.debug(f'[var worker {process_id}] Crossover operator: {evo_cfg["crossover_op"]}')
+        log.debug(f'[var worker {process_id}] Mutation operator: {evo_cfg["mutation_op"]}, Crossover operator: {evo_cfg["crossover_op"]}')
 
         if evo_cfg['crossover_op'] in ["sbx", "iso_dd"]:
             self.crossover_op = getattr(self, evo_cfg['crossover_op'])
@@ -193,8 +191,7 @@ class VariationWorker(object):
                     actors_x_evo = self.all_actors[actor_x_ids][:, 0]
                     actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
 
-                    gpu_id = get_least_busy_gpu(self.num_gpus) if self.num_gpus else 0
-                    device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
+                    device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
                     batch_actors_x = BatchMLP(actors_x_evo, device)
                     batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
                     actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
