@@ -258,20 +258,22 @@ class EvalWorker(object):
                 map_agent_id, fitness = self.elites_map[n]  # TODO: make sure this interface is correctly implemented
                 if agent.fitness > fitness:
                     self.elites_map[n] = (map_agent_id, agent.fitness)
+                    agent.genotype = map_agent_id
                     # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
-                    self.all_actors[map_agent_id] = (agent, MAPPED)
+                    self.all_actors[map_agent_id] = (actor, MAPPED)
                     added = True
             else:
                 # need to find a new, unused agent id since this agent maps to a new cell
                 agent_id = self._find_available_agent_id()
                 self.elites_map[n] = (agent_id, agent.fitness)
-                self.all_actors[agent_id] = (agent, MAPPED)
+                agent.genotype = agent_id
+                self.all_actors[agent_id] = (actor, MAPPED)
                 added = True
 
             if added:
                 md = (agent.genotype_id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
                       agent.parent_1_id, agent.parent_2_id, agent.genotype_type, agent.genotype_novel, agent.genotype_delta_f)
-                metadata.append(md)
+                metadata.append(agent)
 
         self.msgr_remote.send((metadata, runtime, frames))
 

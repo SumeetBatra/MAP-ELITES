@@ -97,6 +97,9 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
     eval_cache = np.array([copy.deepcopy(model) for model, _ in all_actors])
     eval_cache_locks = np.array([multiprocessing.Lock() for _ in range(n_niches)])
 
+    # keep track of Individuals()
+    agent_archive = []
+
     # create the CVT
     cluster_centers = cm.cvt(n_niches, cfg['dim_map'], cfg['cvt_samples'], cfg['cvt_use_cache'])
     kdt = KDTree(cluster_centers, leaf_size=30, metric='euclidean')
@@ -168,18 +171,19 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
                 steps += frames
                 fit_list = []
                 if len(metadata) > 0:  # only write actors to file if new, better actors were added to the elites map
-                    for genotype_id, fitness, phenotype, centroid, p1_id, p2_id, genotype_type, genotype_novel, delta_f in metadata:
-                        fit_list.append(fitness)
+                    for agent in metadata:
+                        fit_list.append(agent.fitness)
+                        agent_archive.append(agent)
                         actors_file.write("{} {} {} {} {} {} {} {} {} {}\n".format(n_evals,
-                                                                                   genotype_id,
-                                                                                   fitness,
-                                                                                   phenotype,
-                                                                                   centroid,
-                                                                                   p1_id,
-                                                                                   p2_id,
-                                                                                   genotype_type,
-                                                                                   genotype_novel,
-                                                                                   delta_f))
+                                                                                   agent.genotype_id,
+                                                                                   agent.fitness,
+                                                                                   agent.phenotype,
+                                                                                   agent.centroid,
+                                                                                   agent.parent_1_id,
+                                                                                   agent.parent_2_id,
+                                                                                   agent.genotype_type,
+                                                                                   agent.genotype_novel,
+                                                                                   agent.genotype_delta_f))
                         actors_file.flush()
 
                     # write log
@@ -208,7 +212,8 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
 
             # maybe save a checkpoint
             if cp_evals >= cfg['cp_save_period'] and cfg['cp_save_period'] != -1:
-                save_checkpoint(elites_map, all_actors, n_evals, filename, cfg['checkpoint_dir'], cfg)
+                log.debug("Saving Checkpoint")
+                save_checkpoint(agent_archive, all_actors, n_evals, filename, cfg['checkpoint_dir'], cfg)
                 while len(get_checkpoints(cfg['checkpoint_dir'])) > cfg['keep_checkpoints']:
                     oldest_checkpoint = get_checkpoints(cfg['checkpoint_dir'])[0]
                     if os.path.exists(oldest_checkpoint):
@@ -219,7 +224,7 @@ def compute_ht(cfg, env_fns, num_var_workers, actors_file, filename, save_path, 
     except KeyboardInterrupt:
         log.debug('Keyboard interrupt detected. Saving final results')
 
-    cm.save_archive(elites_map, all_actors, n_evals, filename, save_path)
+    cm.save_archive(agent_archive, all_actors, n_evals, filename, save_path)
     save_cfg(cfg, save_path)
     variation_op.close_processes()
     evaluator.close_envs()

@@ -229,12 +229,11 @@ def save_archive(archive, all_actors, gen, archive_name, save_path, save_models=
     if not os.path.exists(model_path):
         os.mkdir(model_path)
     with open(filename, 'w') as f:
-        for key in archive.values():
-            k = all_actors[key]
+        for k in archive:
             f.write(str(k.fitness) + ' ')
             write_array(k.centroid, f)
             write_array(k.phenotype, f)
-            f.write(str(k.genotype.id) + ' ')
+            f.write(str(k.genotype_id) + ' ')
             f.write("\n")
             if save_models:
-                k.genotype.save(model_path + archive_name + '_actor_' + str(k.genotype.id) + '.pt')
+                all_actors[k.genotype][0].save(model_path + archive_name + '_actor_' + str(k.genotype_id) + '.pt')
