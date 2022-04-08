@@ -1,21 +1,17 @@
-import torch.multiprocessing as multiprocessing
-import os.path
-
-import gym
-import sys
 import argparse
-from functools import partial
-from attrdict import AttrDict
-
-import torch
+import sys
 import numpy as np
+import os
 
-from multiprocessing import Pipe
-from faster_fifo import Queue
 from utils.logger import log, config_wandb
-from wrappers.BDWrapper import BDWrapper
+from envs.isaacgym.make_env import make_gym_env
+from attrdict import AttrDict
 from map_elites.map_elites import compute_gpu
 
+import torch.multiprocessing as multiprocessing
+import torch
+
+# train gpu accelerated isaac gym envs
 
 # CLI args
 def str2bool(v):
@@ -28,9 +24,9 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected')
 
-
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument('--task', type=str, default='Ant', help='Which environment to train on')
     parser.add_argument('--num_workers', type=int, default=-1, help='# of cores to use. -1 means use all cores')
     parser.add_argument('--seed', type=int, default=0, help='seed')
     parser.add_argument('--n_niches', type=int, default=1296, help='number of niches/cells of behavior')
@@ -70,18 +66,8 @@ def parse_args(argv=None):
     parser.add_argument('--eval_batch_size', default=100, type=int, help='Batch size for parallel evaluation of policies')
     parser.add_argument('--proportion_evo', default=0.5, type=float, help='Proportion of batch to use in GA variation (crossovers/mutations)')
 
-
-    #TODO: remove "parallel" parameter from compute() method. Should be based on --num_workers
-
     args = parser.parse_args()
     return args
-
-
-def make_env(env_name='BipedalWalker-v3'):
-    assert env_name in ['BipedalWalker-v3'], 'currently only BipedalWalker-v3 is supported'
-    env = gym.make(env_name)
-    env = BDWrapper(env)
-    return env
 
 
 def main():
@@ -97,23 +83,13 @@ def main():
     args = parse_args()
     cfg = AttrDict(vars(args))
 
-    num_gpus = cfg.num_gpus
-
-    # log hyperparams to wandb
     if cfg.use_wandb:
         config_wandb(batch_size=cfg.batch_size, max_evals=cfg.max_evals)
 
-
-    # # set up factory function to launch parallel environments
-    # assert int(cfg['proportion_evo'] * cfg['eval_batch_size']) % cfg['actors_batch_size'] == 0 and \
-    #        cfg['random_init_batch'] % cfg['actors_batch_size'] == 0, 'number of policies to evaluate during the init/eval phase must be a multiple of actors_batch_size'
-
-
-    # one evaluator per gpu that evaluates actors_batch_size actors in parallel
-    if num_gpus > 1:
-        env_fns = [[partial(make_env) for _ in range(cfg.actors_batch_size)] for _ in range(num_gpus)]
-    else:
-        env_fns = [partial(make_env) for _ in range(cfg.actors_batch_size)]
+    # TODO: cleanup
+    cfg['num_agents'] = cfg.actors_batch_size
+    cfg['headless'] = True
+    envs = make_gym_env(cfg)
 
 
     # make folders
@@ -135,30 +111,13 @@ def main():
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
-    # get process num_workers input
-    num_cores = multiprocessing.cpu_count()
-    num_workers = cfg.num_workers
-    if num_workers == -1: num_workers = num_cores
-    assert num_workers <= num_cores, '--num_workers must be less than or equal to the number of cores on your machine. Multiple workers per cpu are currently not supported'
-    cfg.num_workers = num_workers  # for printing the cfg vars
-
-    # same thing with variation workers
-    # TODO: implement multiprocessing version with signal-slot model
-    num_var_workers = cfg.num_variation_workers
-    if num_var_workers == -1:
-        cfg.num_variation_workers = num_cores
-        num_var_workers = num_cores
-
-
     compute_gpu(cfg,
-                env_fns,
+                envs,
                 actors_file,
                 filename,
                 cfg.save_path,
                 cfg.n_niches,
                 cfg.max_evals)
-
-    return 1
 
 
 if __name__ == '__main__':
