@@ -50,6 +50,7 @@ import torch
 import torch.multiprocessing as multiprocessing
 from sklearn.neighbors import KDTree
 from models.ant_model import ant_model_factory
+from models.bipedal_walker_model import bpwalker_model_factory
 from faster_fifo import Queue
 from map_elites.variation2 import VariationOperator
 from map_elites.evaluator2 import Evaluator, Individual
@@ -57,7 +58,9 @@ from torch.multiprocessing import Process as TorchProcess, Pipe
 
 from map_elites import common as cm
 from utils.logger import log, config_wandb
+from utils.signal_slot import EventLoopObject, EventLoopProcess, EventLoop
 from utils.utils import *
+from runner.runner import Runner
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -92,7 +95,7 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
     device = torch.device("cpu")  # batches of agents will be put on the least busiest gpu if cuda available during evolution/evaluation
     # initialize all actors
     # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
-    all_actors = np.array([(ant_model_factory(device), UNUSED) for _ in range(n_niches)])
+    all_actors = np.array([(bpwalker_model_factory(device, hidden_size=128), UNUSED) for _ in range(n_niches)])
     # variation workers will put actors that need to be evaluated in here
     eval_cache = np.array([copy.deepcopy(model) for model, _ in all_actors])
 
@@ -114,11 +117,17 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
 
     eval_in_queue = Queue(max_size_bytes=int(1e6))
 
+    runner = Runner(cfg, agent_archive, all_actors, actors_file, filename)
+
+    # do variation and evaluation in a subprocess
+    p_loop = EventLoopProcess('training_loop')
+
     variation_op = VariationOperator(cfg,
                                      all_actors,
                                      elites_map,
                                      eval_cache,
-                                     eval_in_queue,
+                                     event_loop=p_loop.event_loop,
+                                     object_id='variation worker',
                                      crossover_op=cfg.crossover_op,
                                      mutation_op=cfg.mutation_op,
                                      max_gene=cfg.max_genotype,
@@ -140,71 +149,10 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
                           cfg.seed,
                           cfg.num_gpus,
                           kdt,
-                          eval_in_queue)
+                          event_loop=p_loop.event_loop,
+                          object_id='evaluator')
 
-    # initialize the map of elites with a few initial random policies
-    # TODO: replace this with signal-slot refactor
-    rand_init_batch_size = cfg.random_init_batch
-    log.debug(f'Initializing the map of elites with {cfg.random_init} policies')
-    while len(elites_map) <= cfg.random_init:
-        variation_op.init_map(rand_init_batch_size)
-        evaluator.evaluate_batch()
-
-    # main loop
-    log.debug('Running main loop')
-    try:
-        while n_evals < max_evals:
-            start_time = time.time()
-            variation_op.evolve_batch()
-            metadata, runtime, frames, evals = evaluator.evaluate_batch()
-
-            n_evals += evals
-            cp_evals += evals
-            steps += frames
-            fit_list = []
-            if len(metadata) > 0:  # only write actors to file if new, better actors were added to the elites map
-                for agent in metadata:
-                    fit_list.append(agent.fitness)
-                    agent_archive.append(agent)
-                    actors_file.write("{} {} {} {} {} {} {} {} {} {}\n".format(n_evals,
-                                                                               agent.genotype_id,
-                                                                               agent.fitness,
-                                                                               agent.phenotype,
-                                                                               agent.centroid,
-                                                                               agent.parent_1_id,
-                                                                               agent.parent_2_id,
-                                                                               agent.genotype_type,
-                                                                               agent.genotype_novel,
-                                                                               agent.genotype_delta_f))
-                    actors_file.flush()
-
-                # write log
-                log.info(f'n_evals: {n_evals}, mean fitness: {np.mean(fit_list)}, median fitness: {np.median(fit_list)}, \
-                    5th percentile: {np.percentile(fit_list, 5)}, 95th percentile: {np.percentile(fit_list, 95)}')
-                fit_list = np.array(fit_list)
-                if cfg['use_wandb']:
-                    wandb.log({
-                        "evals": n_evals,
-                        "mean fitness": np.mean(fit_list),
-                        "median fitness": np.median(fit_list),
-                        "5th percentile": np.percentile(fit_list, 5),
-                        "95th percentile": np.percentile(fit_list, 95),
-                        "env steps": steps
-                    })
-
-            if time.time() - start_time > evaluator.report_interval:
-                fps, eps = evaluator.report_evals(steps, n_evals)
-                if cfg.use_wandb:
-                    wandb.log({
-                        "evals/sec (EPS)": eps,
-                        "fps": fps
-                    })
-
-
-    except KeyboardInterrupt:
-        log.debug('Keyboard interrupt detected. Saving final results')
-
-    cm.save_archive(agent_archive, all_actors, n_evals, filename, save_path)
-    save_cfg(cfg, save_path)
-    evaluator.close_envs()
-    log.debug('Done!')
+    runner.init_loops(variation_op, evaluator)
+    p_loop.start()
+    runner.event_loop.exec()
+    p_loop.join()

@@ -4,15 +4,17 @@ import copy
 
 from utils.logger import log
 from utils.vectorized import BatchMLP
+from utils.signal_slot import EventLoopObject, signal
 
 
-class VariationOperator(object):
+class VariationOperator(EventLoopObject):
     def __init__(self,
                  cfg,
                  all_actors,
                  elites_map,
                  eval_cache,
-                 eval_in_queue,
+                 event_loop,
+                 object_id,
                  crossover_op='iso_dd',
                  mutation_op=None,
                  max_gene=False,
@@ -26,12 +28,12 @@ class VariationOperator(object):
                  iso_sigma=0.005,
                  line_sigma=0.05
                  ):
-
+        super().__init__(event_loop, object_id)
         self.cfg = cfg
         self.all_actors = all_actors
         self.elites_map = elites_map
         self.eval_cache = eval_cache
-        self.eval_in_queue = eval_in_queue
+        self.init_mode = False
 
         # variation hyperparams
         if cfg.crossover_op in ["sbx", "iso_dd"]:
@@ -56,34 +58,52 @@ class VariationOperator(object):
         self.iso_sigma = iso_sigma
         self.line_sigma = line_sigma
 
+    @signal
+    def to_evaluate(self): pass
 
-    def init_map(self, rand_init_batch_size):
+    @signal
+    def done(self): pass
+
+    @signal
+    def stop(self): pass
+
+    def on_stop(self):
+        self.done.emit(self.object_id)
+
+    def init_map(self):
         '''
         Initialize the map of elites
         '''
-        keys = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
-        actor_x_ids = []
-        actor_y_ids = [None for _ in range(len(actor_x_ids))]
-        if self.mutation_op and not self.crossover_op:
-            actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+        rand_init_batch_size = self.cfg.random_init_batch
+        log.debug('Initializing the map of elites')
+        if len(self.elites_map) <= self.cfg.random_init:
+            keys = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+            actor_x_ids = []
+            actor_y_ids = [None for _ in range(len(actor_x_ids))]
+            if self.mutation_op and not self.crossover_op:
+                actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
 
-        elif self.crossover_op:
-            actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
-            actor_y_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+            elif self.crossover_op:
+                actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+                actor_y_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
 
-        actors_x_evo = self.all_actors[actor_x_ids][:, 0]
-        actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
+            actors_x_evo = self.all_actors[actor_x_ids][:, 0]
+            actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
 
-        device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
-        batch_actors_x = BatchMLP(actors_x_evo, device)
-        batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
-        with torch.no_grad():
-            actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
+            device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
+            batch_actors_x = BatchMLP(actors_x_evo, device)
+            batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
+            with torch.no_grad():
+                actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
 
-        # place in eval cache for Evaluator to evaluate
-        # TODO: replace this with emitting a signal in refactor
-        self.eval_cache[actor_x_ids] = actors_z
-        self.eval_in_queue.put(actor_x_ids, block=True, timeout=1e9)
+            # place in eval cache for Evaluator to evaluate
+            self.eval_cache[actor_x_ids] = actors_z
+            self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
+        # log.debug('Finished elites map initialization!')
+        # self.init_mode = False
+        # # TODO: better way to do this?
+        # self.evolve_batch()
+
 
     def flush(self, q):
         '''
@@ -125,7 +145,7 @@ class VariationOperator(object):
 
         # place in eval cache for Evaluator to evaluate
         self.eval_cache[actor_x_ids] = actors_z
-        self.eval_in_queue.put(actor_x_ids, block=True, timeout=0.1)
+        self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
 
 
     def evo(self, actor_x, actor_y, device, crossover_op=None, mutation_op=None):

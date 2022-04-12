@@ -6,6 +6,7 @@ import time
 from itertools import count
 from utils.vectorized import BatchMLP
 from utils.logger import log
+from utils.signal_slot import EventLoopObject, signal
 from map_elites import common as cm
 from collections import deque
 
@@ -42,7 +43,7 @@ class Individual(object):
         return next_id
 
 
-class Evaluator(object):
+class Evaluator(EventLoopObject):
     def __init__(self,
                  env,
                  all_actors,
@@ -52,11 +53,12 @@ class Evaluator(object):
                  seed,
                  num_gpus,
                  kdt,
-                 eval_in_queue):
+                 event_loop,
+                 object_id):
         '''
         A class for batch evaluations of mutated policies
         '''
-
+        super().__init__(event_loop, object_id)
         self.env = env
         self.all_actors = all_actors
         self.eval_cache = eval_cache
@@ -65,28 +67,39 @@ class Evaluator(object):
         self.seed = seed
         self.num_gpus = num_gpus
         self.kdt = kdt
-        self.eval_in_queue = eval_in_queue
         self.eval_id = 0
 
-        # logging variables
-        self.avg_stats_intervals = (2, 12, 60)  # 10 seconds, 1 minute, 5 minutes
-        self._report_interval = 5.0  # report every 5 seconds
-        self._last_report = 0.0
-        self.eval_stats = deque([], maxlen=max(self.avg_stats_intervals))
 
+    @signal
+    def done(self): pass
 
-    def evaluate_batch(self):
-        # TODO, replace this with signal_slot model
-        mutated_actor_keys = self.eval_in_queue.get(block=True, timeout=1e9)
+    @signal
+    def eval_results(self): pass
+
+    @signal
+    def request_new_batch(self): pass
+
+    def on_evaluate(self, var_id, mutated_actor_keys, init_mode=False):
+        '''
+        Evaluate a new batch of mutated policies
+        :param var_id: Variation Worker that mutated the actors
+        :param mutated_actor_keys: locations in the eval cache that hold the mutated policies
+        '''
+        log.debug(f'Received batch of mutated policy keys from {var_id}')
+        self.evaluate_batch(mutated_actor_keys, init_mode)
+
+    def evaluate_batch(self, mutated_actor_keys, init_mode=False):
         start_time = time.time()
         actors = self.eval_cache[mutated_actor_keys]
 
         device = torch.device(f'cuda:0' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
-        self.env.seed(int((self.seed * 100) * self.eval_id))
+        for env in self.env:
+            env.seed(int((self.seed * 100) * self.eval_id))
         self.eval_id += 1
-        obs = self.env.reset()['obs']  # isaac gym returns dict that contains obs
+        # obs = self.env.reset()['obs']  # isaac gym returns dict that contains obs
+        obs = torch.from_numpy(np.array([env.reset() for env in self.env])).reshape(num_actors, -1).to(device)
 
         rews = [0 for _ in range(num_actors)]
         dones = [False for _ in range(num_actors)]
@@ -95,22 +108,28 @@ class Evaluator(object):
         while not all(dones):
             obs_arr = []
             with torch.no_grad():
-                acts = batch_actors(obs)
-                for idx, (act, env) in enumerate(zip(acts, self.envs)):
+                acts = batch_actors(obs).detach().cpu().numpy()
+                for idx, (act, env) in enumerate(zip(acts, self.env)):
                     obs, rew, done, info = env.step(act)
                     rews[idx] += rew * (1 - dones[idx])
                     obs_arr.append(obs)
                     dones[idx] = done
                     infos[idx] = info
                 obs = torch.from_numpy(np.array(obs_arr)).reshape(num_actors, -1).to(device)
-        ep_lengths = [env.ep_length for env in self.envs]
+
+        if not init_mode:  # if init_map() is running, we don't need to do this
+            # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
+            self.request_new_batch.emit()
+
+        ep_lengths = [env.ep_length for env in self.env]
         frames = sum(ep_lengths)
         bds = [info['desc'] for info in infos]  # list of behavioral descriptors
 
         runtime = time.time() - start_time
         metadata, runtime, frames, evals = self._map_agents(actors, mutated_actor_keys, bds, rews, runtime, frames)
         log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
-        return metadata, runtime, frames, evals
+        self.eval_results.emit(self.object_id, metadata, runtime, frames, evals)
+
 
     def _map_agents(self, actors, actor_keys, descs, rews, runtime, frames):
         '''
@@ -166,31 +185,10 @@ class Evaluator(object):
         return next(i for i in range(len(self.all_actors)) if self.all_actors[i][1] == UNUSED)
 
     def close_envs(self):
-        for env in self.envs:
+        for env in self.env:
             env.close()
 
-
-    @property
-    def report_interval(self):
-        return self._report_interval
-
-    @property
-    def last_report(self):
-        return self._last_report
-
-    def report_evals(self, total_env_steps, total_evals):
-        now = time.time()
-        self.eval_stats.append((now, total_env_steps, total_evals))
-        if len(self.eval_stats) <= 1: return 0.0, 0.0
-
-        fps, eps = [], []
-        for avg_interval in self.avg_stats_intervals:
-            past_time, past_frames, past_evals = self.eval_stats[max(0, len(self.eval_stats) - 1 - avg_interval)]
-            fps.append(round((total_env_steps - past_frames) / (now - past_time), 1))
-            eps.append(round((total_evals - past_evals) / (now - past_time), 1))
-
-        log.debug(f'Evals/sec (EPS) 10 sec: {eps[0]}, 60 sec: {eps[1]}, 300 sec: {eps[2]}, '
-                  f'FPS 10 sec: {fps[0]}, 60 sec: {fps[1]}, 300 sec: {fps[2]}')
-
-        self._last_report = now
-        return fps[2], eps[2]
+    def on_stop(self):
+        self.close_envs()
+        self.done.emit(self.object_id)
+        log.debug('Done!')

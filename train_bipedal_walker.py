@@ -45,7 +45,7 @@ def parse_args(argv=None):
     parser.add_argument('--save_period', default=500, type=int, help='How many evaluations b/w saving archives')
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
-    parser.add_argument('--cp_save_period', default=500, type=int, help='How many evaluations b/w saving checkpoints')
+    parser.add_argument('--cp_save_period_sec', default=300, type=int, help='How many seconds b/w saving checkpoints')
     parser.add_argument('--use_wandb', default=True, type=str2bool, help='log results to weights and biases')
 
     # args for parallelization
@@ -115,6 +115,7 @@ def main():
     else:
         env_fns = [partial(make_env) for _ in range(cfg.actors_batch_size)]
 
+    envs = [make_env() for _ in range(cfg.actors_batch_size)]
 
     # make folders
     if not os.path.exists(cfg.save_path):
@@ -151,7 +152,7 @@ def main():
 
 
     compute_gpu(cfg,
-                env_fns,
+                envs,
                 actors_file,
                 filename,
                 cfg.save_path,

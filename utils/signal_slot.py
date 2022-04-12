@@ -248,13 +248,19 @@ class EventLoop(EventLoopObject):
         self.verbose = False
 
         # connect to our own termination signal
-        self.terminate.connect(self._terminate)
+        self._internal_terminate.connect(self._terminate)
 
+    """Emitted right before the start of the loop."""
     @signal
     def start(self): pass
 
+    """Emitted upon loop termination."""
     @signal
     def terminate(self): pass
+
+    """Internal signal: do not connect to this."""
+    @signal
+    def _internal_terminate(self): pass
 
     def add_timer(self, t: Timer):
         self.timers.append(t)
@@ -268,11 +274,10 @@ class EventLoop(EventLoopObject):
         After this the loop does only one last iteration, if any new signals are emitted during this last iteration
         they will be ignored.
         """
-        self.terminate.emit()
+        self._internal_terminate.emit()
 
     def _terminate(self):
         """Forceful termination, some of the signals currently in the queue might remain unprocessed."""
-        log.debug(f'Event loop {self.object_id} terminating...')
         self.should_terminate = True
 
     def broadcast(self, *args):
@@ -284,7 +289,7 @@ class EventLoop(EventLoopObject):
 
     def _process_signal(self, signal_):
         if self.verbose:
-            log.debug(f'Processing {signal_=}...')
+            log.debug(f'{self} received {signal_=}...')
 
         emitter_object_id, signal_name, args = signal_
         emitter = Emitter(emitter_object_id, signal_name)
@@ -294,33 +299,34 @@ class EventLoop(EventLoopObject):
         for obj_id in receiver_ids:
             obj = self.objects.get(obj_id)
             if obj is None:
-                log.warning(f'Attempting to call a slot on an object {obj_id} which is not found on this loop')
+                if self.verbose:
+                    log.warning(f'{self} attempting to call a slot on an object {obj_id} which is not found on this loop ({signal_=})')
                 self.receivers[emitter].remove(obj_id)
                 continue
 
             slot = obj.connections.get(emitter)
             if obj is None:
-                log.warning(f'{emitter=} does not appear to be connected to {obj_id=}')
+                log.warning(f'{self} {emitter=} does not appear to be connected to {obj_id=}')
                 continue
 
             if not hasattr(obj, slot):
-                log.warning(f'{slot=} not found in object {obj_id}')
+                log.warning(f'{self} {slot=} not found in object {obj_id}')
                 continue
 
             slot_callable = getattr(obj, slot)
             if not isinstance(slot_callable, Callable):
-                log.warning(f'{slot=} of {obj_id=} is not callable')
+                log.warning(f'{self} {slot=} of {obj_id=} is not callable')
                 continue
 
             self.curr_emitter = emitter
             if self.verbose:
-                log.debug(f'Calling slot {obj_id}:{slot}')
+                log.debug(f'{self} calling slot {obj_id}:{slot}')
 
             # noinspection PyBroadException
             try:
                 slot_callable(*args)
             except Exception as exc:
-                log.exception(f'Unhandled exception in {slot=} connected to {emitter=}')
+                log.exception(f'{self} unhandled exception in {slot=} connected to {emitter=}')
                 raise exc
 
     def _calculate_timeout(self) -> Timer:
@@ -337,7 +343,7 @@ class EventLoop(EventLoopObject):
         try:
             self.start.emit()
 
-            while not self.should_terminate:
+            while True:
                 closest_timer = self._calculate_timeout()
 
                 try:
@@ -355,6 +361,12 @@ class EventLoop(EventLoopObject):
 
                 for s in signals:
                     self._process_signal(s)
+
+                if self.should_terminate:
+                    log.debug(f'Loop {self.object_id} terminating...')
+                    self.terminate.emit()
+                    break
+
         except Exception as exc:
             log.warning(f'Unhandled exception {exc} in evt loop {self.object_id}')
             raise exc
@@ -365,7 +377,7 @@ class EventLoop(EventLoopObject):
         return status
 
     def __str__(self):
-        return f'EvtLoop {process_name(self.process)}'
+        return f'EvtLoop [{self.object_id}, process={process_name(self.process)}]'
 
 
 class Timer(EventLoopObject):
@@ -418,7 +430,7 @@ class Timer(EventLoopObject):
 
 
 class EventLoopProcess(EventLoopObject):
-    def __init__(self, unique_process_name, multiprocessing_context=None, daemon=None):
+    def __init__(self, unique_process_name, multiprocessing_context=None, init_func=None, args=(), kwargs=None, daemon=None):
         """
         Here we could've inherited from Process, but the actual class of process (i.e. Process vs SpawnProcess)
         depends on the multiprocessing context and hence is not known during the generation of the class.
@@ -427,11 +439,17 @@ class EventLoopProcess(EventLoopObject):
         """
         process_cls = multiprocessing.Process if multiprocessing_context is None else multiprocessing_context.Process
 
+        self._init_func: Optional[Callable] = init_func
+        self._args = tuple(args)
+        self._kwargs = dict() if kwargs is None else dict(kwargs)
+
         self._process = process_cls(target=self._target, name=unique_process_name, daemon=daemon)
         self.event_loop = EventLoop(f'{unique_process_name}_evt_loop')
         EventLoopObject.__init__(self, self.event_loop, unique_process_name)
 
     def _target(self):
+        if self._init_func:
+            self._init_func(*self._args, **self._kwargs)
         self.event_loop.exec()
 
     def start(self):
