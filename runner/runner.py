@@ -170,7 +170,7 @@ class Runner(EventLoopObject):
         self.event_loop.start.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
         self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
         self.evaluator.request_new_batch.connect(self.variation_op.evolve_batch)  # evaluator requests more mutated policies when its finished evaluating the current batch
-
+        self.evaluator.request_from_init_map.connect(self.variation_op.init_map)
         # auxiliary connections for logging
         self.evaluator.eval_results.connect(self.on_eval_results)
 

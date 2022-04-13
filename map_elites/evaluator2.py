@@ -79,13 +79,15 @@ class Evaluator(EventLoopObject):
     @signal
     def request_new_batch(self): pass
 
-    def on_evaluate(self, var_id, mutated_actor_keys, init_mode=False):
+    @signal
+    def request_from_init_map(self): pass  # send this signal until init_map() has produced enough policies
+
+    def on_evaluate(self, var_id, mutated_actor_keys, init_mode):
         '''
         Evaluate a new batch of mutated policies
         :param var_id: Variation Worker that mutated the actors
         :param mutated_actor_keys: locations in the eval cache that hold the mutated policies
         '''
-        log.debug(f'Received batch of mutated policy keys from {var_id}')
         self.evaluate_batch(mutated_actor_keys, init_mode)
 
     def evaluate_batch(self, mutated_actor_keys, init_mode=False):
@@ -120,6 +122,8 @@ class Evaluator(EventLoopObject):
         if not init_mode:  # if init_map() is running, we don't need to do this
             # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
             self.request_new_batch.emit()
+        else:
+            self.request_from_init_map.emit()
 
         ep_lengths = [env.ep_length for env in self.env]
         frames = sum(ep_lengths)

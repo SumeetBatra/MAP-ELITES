@@ -33,7 +33,7 @@ class VariationOperator(EventLoopObject):
         self.all_actors = all_actors
         self.elites_map = elites_map
         self.eval_cache = eval_cache
-        self.init_mode = False
+        self.init_mode = True
 
         # variation hyperparams
         if cfg.crossover_op in ["sbx", "iso_dd"]:
@@ -99,10 +99,10 @@ class VariationOperator(EventLoopObject):
             # place in eval cache for Evaluator to evaluate
             self.eval_cache[actor_x_ids] = actors_z
             self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
-        # log.debug('Finished elites map initialization!')
-        # self.init_mode = False
-        # # TODO: better way to do this?
-        # self.evolve_batch()
+        else:
+            log.debug('Finished elites map initialization!')
+            self.init_mode = False
+            self.evolve_batch()
 
 
     def flush(self, q):

@@ -120,13 +120,14 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
     runner = Runner(cfg, agent_archive, all_actors, actors_file, filename)
 
     # do variation and evaluation in a subprocess
-    p_loop = EventLoopProcess('training_loop')
+    var_loop = EventLoopProcess('var_loop')
+    eval_loop = EventLoopProcess('eval_loop')
 
     variation_op = VariationOperator(cfg,
                                      all_actors,
                                      elites_map,
                                      eval_cache,
-                                     event_loop=p_loop.event_loop,
+                                     event_loop=var_loop.event_loop,
                                      object_id='variation worker',
                                      crossover_op=cfg.crossover_op,
                                      mutation_op=cfg.mutation_op,
@@ -149,10 +150,12 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
                           cfg.seed,
                           cfg.num_gpus,
                           kdt,
-                          event_loop=p_loop.event_loop,
+                          event_loop=eval_loop.event_loop,
                           object_id='evaluator')
 
     runner.init_loops(variation_op, evaluator)
-    p_loop.start()
+    var_loop.start()
+    eval_loop.start()
     runner.event_loop.exec()
-    p_loop.join()
+    var_loop.join()
+    eval_loop.join()
