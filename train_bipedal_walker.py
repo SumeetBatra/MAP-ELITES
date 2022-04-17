@@ -152,7 +152,6 @@ def main():
 
 
     compute_gpu(cfg,
-                envs,
                 actors_file,
                 filename,
                 cfg.save_path,

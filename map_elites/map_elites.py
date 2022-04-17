@@ -52,8 +52,8 @@ from sklearn.neighbors import KDTree
 from models.ant_model import ant_model_factory
 from models.bipedal_walker_model import bpwalker_model_factory
 from faster_fifo import Queue
-from map_elites.variation2 import VariationOperator
-from map_elites.evaluator2 import Evaluator, Individual
+from map_elites.variation import VariationOperator
+from map_elites.evaluator import Evaluator, Individual
 from torch.multiprocessing import Process as TorchProcess, Pipe
 
 from map_elites import common as cm
@@ -88,14 +88,14 @@ def __add_to_archive(s, centroid, archive, kdt):
         return 1
 
 
-def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_evals=1e5):
+def compute_gpu(cfg, actors_file, filename, save_path, n_niches=1000, max_evals=1e5):
     # for shared objects
     manager = multiprocessing.Manager()
 
     device = torch.device("cpu")  # batches of agents will be put on the least busiest gpu if cuda available during evolution/evaluation
     # initialize all actors
     # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
-    all_actors = np.array([(bpwalker_model_factory(device, hidden_size=128), UNUSED) for _ in range(n_niches)])
+    all_actors = np.array([(ant_model_factory(device, hidden_size=128), UNUSED) for _ in range(n_niches)])
     # variation workers will put actors that need to be evaluated in here
     eval_cache = np.array([copy.deepcopy(model) for model, _ in all_actors])
 
@@ -142,7 +142,7 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
                                      iso_sigma=cfg.iso_sigma,
                                      line_sigma=cfg.line_sigma)
 
-    evaluator = Evaluator(envs,
+    evaluator = Evaluator(cfg,
                           all_actors,
                           eval_cache,
                           elites_map,
@@ -150,7 +150,7 @@ def compute_gpu(cfg, envs, actors_file, filename, save_path, n_niches=1000, max_
                           cfg.seed,
                           cfg.num_gpus,
                           kdt,
-                          event_loop=eval_loop.event_loop,
+                          event_loop=var_loop.event_loop,
                           object_id='evaluator')
 
     runner.init_loops(variation_op, evaluator)

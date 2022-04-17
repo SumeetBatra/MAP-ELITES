@@ -41,7 +41,7 @@ def parse_args(argv=None):
     parser.add_argument('--save_period', default=500, type=int, help='How many evaluations b/w saving archives')
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
-    parser.add_argument('--cp_save_period', default=500, type=int, help='How many evaluations b/w saving checkpoints')
+    parser.add_argument('--cp_save_period_sec', default=500, type=int, help='How many evaluations b/w saving checkpoints')
     parser.add_argument('--use_wandb', default=True, type=str2bool, help='log results to weights and biases')
 
     # args for parallelization
@@ -66,6 +66,10 @@ def parse_args(argv=None):
     parser.add_argument('--eval_batch_size', default=100, type=int, help='Batch size for parallel evaluation of policies')
     parser.add_argument('--proportion_evo', default=0.5, type=float, help='Proportion of batch to use in GA variation (crossovers/mutations)')
 
+    # args for isaac gym
+    parser.add_argument('--num_agents', default=10, type=int, help='Number of parallel envs in vectorized env')
+    parser.add_argument('--headless', default=True, type=str2bool, help='Choose whether or not to render the scene')
+
     args = parser.parse_args()
     return args
 
@@ -85,11 +89,6 @@ def main():
 
     if cfg.use_wandb:
         config_wandb(batch_size=cfg.batch_size, max_evals=cfg.max_evals)
-
-    # TODO: cleanup
-    cfg['num_agents'] = cfg.actors_batch_size
-    cfg['headless'] = True
-    envs = make_gym_env(cfg)
 
 
     # make folders
@@ -112,7 +111,6 @@ def main():
     np.random.seed(cfg.seed)
 
     compute_gpu(cfg,
-                envs,
                 actors_file,
                 filename,
                 cfg.save_path,

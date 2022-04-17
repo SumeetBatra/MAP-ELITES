@@ -33,7 +33,7 @@ from isaacgym.gymtorch import *
 
 from envs.isaacgym.isaacgymenvs.utils.torch_jit_utils import *
 from .base.vec_task import VecTask
-
+from utils.logger import log
 
 class Ant(VecTask):
 
@@ -306,6 +306,58 @@ class Ant(VecTask):
                 colors.append([0.05, 0.99, 0.04])
 
             self.gym.add_lines(self.viewer, None, self.num_envs * 2, points, colors)
+
+
+class QDAnt(Ant):
+    def __init__(self, cfg, sim_device, graphics_device_id, headless):
+        super().__init__(cfg, sim_device, graphics_device_id, headless)
+        self.T = torch.Tensor([0 for _ in range(self.num_envs)])
+        self.total_reward = 0
+        self.num_legs = 4
+        self.behavior_desc = torch.zeros((self.num_envs, self.num_legs))
+        self.behavior_desc_acc = torch.zeros((self.num_envs, self.num_legs))
+        self.all_done = torch.Tensor([False for _ in range(self.num_envs)])
+        self.foot_length = 0.5656854249492381  # from the ant xml -> sqrt( .4^2 + .4^2)
+
+    def step(self, actions):
+        res = super().step(actions)
+        self.get_contact_with_ground()
+        obs, rews, dones, infos = res[0]['obs'], res[1], res[2], res[3]
+        for i in range(len(dones)):
+            if dones[i] and not self.all_done[i]: # only want to do this once for each env, so keep track if whether each idx was T/F in the last call of step()
+                self.behavior_desc[i] = self.behavior_desc_acc[i] / self.T[i]
+                infos[i]['desc'] = self.behavior_desc[i]
+            else:
+                self.T[i] += 1
+                # TODO: accumulate the behavior desc
+        self.all_done = dones
+        return obs, rews, dones, infos
+
+    def reset(self):
+        obs = super().reset()
+        self.T = torch.Tensor([0 for _ in range(self.num_envs)])
+        self.total_reward = 0
+        self.behavior_desc = torch.zeros((self.num_envs, self.num_legs))
+        self.behavior_desc_acc = torch.zeros((self.num_envs, self.num_legs))
+        self.all_done = torch.Tensor([False for _ in range(self.num_envs)])
+        return obs
+
+    def get_contact_with_ground(self):
+        rigid_body_states = wrap_tensor(self.gym.acquire_rigid_body_state_tensor(self.sim)).reshape(self.num_envs, -1, 13)
+        for body in rigid_body_states:
+            feet_pos = body[self.extremities_index, 0:3]
+            feet_rot_quat = body[self.extremities_index, 3:7]
+            x, y, z = get_vec_dir(feet_rot_quat)
+            vec_dir = torch.stack((x, y, z)).to(self.device).T
+            vec_dir = vec_dir / torch.norm(vec_dir, dim=1).view(-1, 1)
+            # feet_rot_euler = torch.Tensor(list((zip(*get_euler_xyz(feet_rot_quat))))).to(self.device)
+            feet_end_pos = feet_pos + vec_dir * self.foot_length
+            log.debug(f'Feet positions (z): {feet_pos[:, 2]}')
+
+
+
+
+
 
 #####################################################################
 ###=========================jit functions=========================###
