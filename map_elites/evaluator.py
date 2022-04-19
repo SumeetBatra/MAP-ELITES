@@ -84,8 +84,12 @@ class Evaluator(EventLoopObject):
     @signal
     def request_from_init_map(self): pass  # send this signal until init_map() has produced enough policies
 
+    @signal
+    def init_elites_map(self): pass
+
     def init_env(self):
         self.vec_env = make_gym_env(self.cfg)
+        self.init_elites_map.emit()
 
     def on_evaluate(self, var_id, mutated_actor_keys, init_mode):
         '''
@@ -98,7 +102,6 @@ class Evaluator(EventLoopObject):
     def evaluate_batch(self, mutated_actor_keys, init_mode=False):
         start_time = time.time()
         actors = self.eval_cache[mutated_actor_keys]
-
         device = torch.device(f'cuda:0' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
@@ -119,67 +122,22 @@ class Evaluator(EventLoopObject):
         runtime = time.time() - start_time
         log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
 
-        if not init_mode:  # if init_map() is running, we don't need to do this
-            # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
-            self.request_new_batch.emit()
-        else:
-            self.request_from_init_map.emit()
+        # if init_mode: # if init_map() is running, we don't need to do this
+        #     # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
+        #     self.request_from_init_map.emit()
 
         ep_lengths = info['ep_lengths']
         frames = sum(ep_lengths).cpu().numpy()
         bds = info['desc'].cpu().numpy()  # behavior descriptors
         rews = rews.cpu().numpy()
 
-        # metadata, runtime, frames, evals = self._map_agents(actors, mutated_actor_keys, bds, rews, runtime, frames)
-        metadata, evals = [], 0
-        self.eval_results.emit(self.object_id, metadata, runtime, frames, evals)
-
-
-
-    def evaluate_batch_old(self, mutated_actor_keys, init_mode=False):
-        start_time = time.time()
-        actors = self.eval_cache[mutated_actor_keys]
-
-        device = torch.device(f'cuda:0' if torch.cuda.is_available() else 'cpu')
-        batch_actors = BatchMLP(actors, device)
-        num_actors = len(actors)
-        for env in self.env:
-            env.seed(int((self.seed * 100) * self.eval_id))
-        self.eval_id += 1
-        # obs = self.env.reset()['obs']  # isaac gym returns dict that contains obs
-        obs = torch.from_numpy(np.array([env.reset() for env in self.env])).reshape(num_actors, -1).to(device)
-
-        rews = [0 for _ in range(num_actors)]
-        dones = [False for _ in range(num_actors)]
-        infos = [None for _ in range(num_actors)]
-        # get a batch of trajectories and rewards
-        while not all(dones):
-            obs_arr = []
-            with torch.no_grad():
-                acts = batch_actors(obs).detach().cpu().numpy()
-                for idx, (act, env) in enumerate(zip(acts, self.env)):
-                    obs, rew, done, info = env.step(act)
-                    rews[idx] += rew * (1 - dones[idx])
-                    obs_arr.append(obs)
-                    dones[idx] = done
-                    infos[idx] = info
-                obs = torch.from_numpy(np.array(obs_arr)).reshape(num_actors, -1).to(device)
-
-        if not init_mode:  # if init_map() is running, we don't need to do this
-            # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
-            self.request_new_batch.emit()
-        else:
-            self.request_from_init_map.emit()
-
-        ep_lengths = [env.ep_length for env in self.env]
-        frames = sum(ep_lengths)
-        bds = [info['desc'] for info in infos]  # list of behavioral descriptors
-
-        runtime = time.time() - start_time
-        metadata, runtime, frames, evals = self._map_agents(actors, mutated_actor_keys, bds, rews, runtime, frames)
-        log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
-        self.eval_results.emit(self.object_id, metadata, runtime, frames, evals)
-
+        agents = []
+        for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys, bds, rews):
+            agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
+                               genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
+                               phenotype=desc, fitness=rew)
+            agents.append(agent)
+        self.eval_results.emit(self.object_id, agents, mutated_actor_keys, frames)
 
     def _map_agents(self, actors, actor_keys, descs, rews, runtime, frames):
         '''

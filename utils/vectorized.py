@@ -89,6 +89,9 @@ class BatchMLP(nn.Module):
         for i in range(len(self.mlps)):
             self.mlps[i].to(device)
 
+    def __len__(self):
+        return self.num_mlps
+
 
 class CloudpickleWrapper(object):
     """

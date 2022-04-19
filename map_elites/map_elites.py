@@ -117,7 +117,7 @@ def compute_gpu(cfg, actors_file, filename, save_path, n_niches=1000, max_evals=
 
     eval_in_queue = Queue(max_size_bytes=int(1e6))
 
-    runner = Runner(cfg, agent_archive, all_actors, actors_file, filename)
+    runner = Runner(cfg, agent_archive, elites_map, eval_cache, all_actors, kdt, actors_file, filename)
 
     # do variation and evaluation in a subprocess
     var_loop = EventLoopProcess('var_loop')
@@ -150,12 +150,12 @@ def compute_gpu(cfg, actors_file, filename, save_path, n_niches=1000, max_evals=
                           cfg.seed,
                           cfg.num_gpus,
                           kdt,
-                          event_loop=var_loop.event_loop,
+                          event_loop=eval_loop.event_loop,
                           object_id='evaluator')
 
     runner.init_loops(variation_op, evaluator)
-    var_loop.start()
     eval_loop.start()
+    var_loop.start()
     runner.event_loop.exec()
     var_loop.join()
     eval_loop.join()

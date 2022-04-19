@@ -1,10 +1,12 @@
+import time
+
 import numpy as np
 import torch
 import copy
 
 from utils.logger import log
 from utils.vectorized import BatchMLP
-from utils.signal_slot import EventLoopObject, signal
+from utils.signal_slot import EventLoopObject, signal, Timer
 
 
 class VariationOperator(EventLoopObject):
@@ -34,6 +36,7 @@ class VariationOperator(EventLoopObject):
         self.elites_map = elites_map
         self.eval_cache = eval_cache
         self.init_mode = True
+        self.queued_for_eval = 0  # want to always keep some mutated policies queued so that the evaluator(s) are never waiting
 
         # variation hyperparams
         if cfg.crossover_op in ["sbx", "iso_dd"]:
@@ -58,6 +61,11 @@ class VariationOperator(EventLoopObject):
         self.iso_sigma = iso_sigma
         self.line_sigma = line_sigma
 
+        def periodic(period, callback):
+            return Timer(self.event_loop, period).timeout.connect(callback)
+
+        periodic(3.0, self.maybe_mutate_new_batch)
+
     @signal
     def to_evaluate(self): pass
 
@@ -69,6 +77,15 @@ class VariationOperator(EventLoopObject):
 
     def on_stop(self):
         self.done.emit(self.object_id)
+
+    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames):
+        num_eval = len(agents)
+        self.queued_for_eval -= num_eval
+        log.debug(f'Received {len(agents)} processed agents, {self.queued_for_eval=}')
+
+    def maybe_mutate_new_batch(self):
+        if self.queued_for_eval < 2 * self.cfg.num_agents:
+            self.init_map() if self.init_mode else self.evolve_batch()
 
     def init_map(self):
         '''
@@ -99,6 +116,7 @@ class VariationOperator(EventLoopObject):
             # place in eval cache for Evaluator to evaluate
             self.eval_cache[actor_x_ids] = actors_z
             self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
+            self.queued_for_eval += len(actor_x_ids)
         else:
             log.debug('Finished elites map initialization!')
             self.init_mode = False
@@ -146,6 +164,7 @@ class VariationOperator(EventLoopObject):
         # place in eval cache for Evaluator to evaluate
         self.eval_cache[actor_x_ids] = actors_z
         self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
+        self.queued_for_eval += len(actor_x_ids)
 
 
     def evo(self, actor_x, actor_y, device, crossover_op=None, mutation_op=None):
@@ -154,7 +173,7 @@ class VariationOperator(EventLoopObject):
         crossover needs 2 parents, thus actor_x and actor_y
         mutation can just be performed on actor_x to get actor_z (child)
         '''
-
+        start_time = time.time()
         actor_z = copy.deepcopy(actor_x)
         actor_z.type = 'evo'
         actor_z_state_dict = actor_z.state_dict()
@@ -172,7 +191,10 @@ class VariationOperator(EventLoopObject):
             actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
 
         actor_z.load_state_dict(actor_z_state_dict)
-        return actor_z.update_mlps()
+        res = actor_z.update_mlps()
+        runtime = time.time() - start_time
+        log.debug(f'Mutated {len(actor_x)} actors in {runtime:.1f} seconds')
+        return res
 
     def batch_crossover(self, batch_x_state_dict, batch_y_state_dict, crossover_op, device):
         """

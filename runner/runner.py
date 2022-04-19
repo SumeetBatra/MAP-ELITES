@@ -9,10 +9,11 @@ from utils.signal_slot import EventLoop, EventLoopObject, EventLoopProcess, sign
 from utils.logger import log
 from utils.utils import cfg_dict
 from map_elites import common as cm
+from map_elites.evaluator import Individual, UNUSED, MAPPED
 
 
 class Runner(EventLoopObject):
-    def __init__(self, cfg, archive, all_actors, actors_file, filename, unique_name='runner loop'):
+    def __init__(self, cfg, archive, elites_map, eval_cache, all_actors, kdt, actors_file, filename, unique_name='runner loop'):
         '''
         This is the main loop that starts other event loops and processes file i/o, logging, etc
         '''
@@ -24,7 +25,10 @@ class Runner(EventLoopObject):
 
         # map elites objects
         self.archive = archive
+        self.elites_map = elites_map
+        self.eval_cache = eval_cache
         self.all_actors = all_actors
+        self.kdt = kdt
         self.checkpoints_dir = self.cfg.checkpoint_dir
         self.actors_file = actors_file
         self.filename = filename
@@ -60,7 +64,8 @@ class Runner(EventLoopObject):
     def last_report(self):
         return self._last_report
 
-    def on_eval_results(self, oid, metadata, runtime, frames, evals):
+    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames):
+        metadata, evals = self._map_agents(agents, evaluated_actors_keys)
         self._update_training_stats(frames, evals)
         fit_list = []
         for agent in metadata:
@@ -103,6 +108,59 @@ class Runner(EventLoopObject):
             os.makedirs(filepath)
         self._save_archive(self.archive, self.all_actors, self.total_evals, self.filename, save_path=filepath, save_models=True)
         self._save_cfg(self.cfg, filepath)
+
+    def _find_available_agent_id(self):
+        '''
+        If an agent maps to a new cell in the elites map, need to give it a new, unused id from the pool of agents
+        :returns an agent id that's not being used by some other agent in the elites map
+        '''
+        return next(i for i in range(len(self.all_actors)) if self.all_actors[i][1] == UNUSED)
+
+    def _map_agents(self, agents, evaluated_actors_keys):
+        '''
+        Map the evaluated agents using their behavior descriptors. Send the metadata back to the main process for logging
+        :param behav_descs: behavior descriptors of a batch of evaluated agents
+        :param rews: fitness scores of a batch of evaluated agents
+        '''
+        start_time = time.time()
+        metadata = []
+        evals = len(agents)
+        policies = self.eval_cache[evaluated_actors_keys]
+        for policy, agent in zip(policies, agents):
+            added = False
+
+            niche_index = self.kdt.query([agent.phenotype], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
+            niche = self.kdt.data[niche_index]
+            n = cm.make_hashable(niche)
+            agent.centroid = n
+            if n in self.elites_map:
+                # natural selection
+                map_agent_id, fitness = self.elites_map[
+                    n]  # TODO: make sure this interface is correctly implemented
+                if agent.fitness > fitness:
+                    self.elites_map[n] = (map_agent_id, agent.fitness)
+                    agent.genotype = map_agent_id
+                    # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
+                    self.all_actors[map_agent_id] = (policy, MAPPED)
+                    added = True
+            else:
+                # need to find a new, unused agent id since this agent maps to a new cell
+                agent_id = self._find_available_agent_id()
+                self.elites_map[n] = (agent_id, agent.fitness)
+                agent.genotype = agent_id
+                self.all_actors[agent_id] = (policy, MAPPED)
+                added = True
+
+            if added:
+                md = (
+                agent.genotype_id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
+                agent.parent_1_id, agent.parent_2_id, agent.genotype_type, agent.genotype_novel,
+                agent.genotype_delta_f)
+                metadata.append(agent)
+        runtime = time.time() - start_time
+        log.debug(f'Finished mapping elite agents in {runtime:.1f} seconds')
+
+        return metadata, evals
 
     def _save_archive(self, archive, all_actors, gen, archive_name, save_path, save_models=False):
         def write_array(a, f):
@@ -167,13 +225,14 @@ class Runner(EventLoopObject):
         self.variation_op, self.evaluator = variation_op, evaluator
 
         # on startup
-        self.event_loop.start.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
         self.event_loop.start.connect(self.evaluator.init_env)  # initialize the envs after we spawn the eval's process so that we don't need to pickle the gym
+        self.evaluator.init_elites_map.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
         self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
         self.evaluator.request_new_batch.connect(self.variation_op.evolve_batch)  # evaluator requests more mutated policies when its finished evaluating the current batch
         self.evaluator.request_from_init_map.connect(self.variation_op.init_map)
         # auxiliary connections for logging
         self.evaluator.eval_results.connect(self.on_eval_results)
+        self.evaluator.eval_results.connect(self.variation_op.on_eval_results)
 
         # stop everything when training completes
         self.stop.connect(self.variation_op.on_stop)  # runner stops the variation worker
