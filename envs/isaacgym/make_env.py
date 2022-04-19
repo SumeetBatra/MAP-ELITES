@@ -50,9 +50,6 @@ def make_gym_env(cfg=None, env_config=None):
         headless=cfg.headless
     )
     env = IsaacGymVecEnv(env)
-    rand_acts = torch.rand((cfg.num_agents, env.env.num_dof))
-    while True:
-        env.step(rand_acts)
     return env
 
 if __name__ == '__main__':

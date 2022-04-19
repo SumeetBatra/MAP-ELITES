@@ -37,7 +37,7 @@ def parse_args(argv=None):
     parser.add_argument('--cvt_use_cache', type=str2bool, default=True, help='do we cache results of CVT and reuse?')
     parser.add_argument('--max_evals', type=int, default=1e6, help='Total number of evaluations to perform')
     parser.add_argument('--save_path', default='./results', type=str, help='path where to save results')
-    parser.add_argument('--dim_map', default=2, type=int, help='Dimensionality of the behavior space. Default is 2 for bipedal walker (obviously)')
+    parser.add_argument('--dim_map', default=4, type=int, help='Dimensionality of the behavior space. Default is 2 for bipedal walker (obviously)')
     parser.add_argument('--save_period', default=500, type=int, help='How many evaluations b/w saving archives')
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')

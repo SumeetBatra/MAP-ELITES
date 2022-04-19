@@ -61,7 +61,7 @@ class Evaluator(EventLoopObject):
         '''
         super().__init__(event_loop, object_id)
         self.cfg = cfg
-        self.vec_env = make_gym_env(cfg)
+        self.vec_env = None
         self.all_actors = all_actors
         self.eval_cache = eval_cache
         self.elites_map = elites_map
@@ -84,6 +84,9 @@ class Evaluator(EventLoopObject):
     @signal
     def request_from_init_map(self): pass  # send this signal until init_map() has produced enough policies
 
+    def init_env(self):
+        self.vec_env = make_gym_env(self.cfg)
+
     def on_evaluate(self, var_id, mutated_actor_keys, init_mode):
         '''
         Evaluate a new batch of mutated policies
@@ -104,15 +107,32 @@ class Evaluator(EventLoopObject):
         self.eval_id + 1
         obs = self.vec_env.reset()['obs']  # isaac gym returns dict that contains obs
 
-        rews = [0 for _ in range(num_actors)]
-        dones = [False for _ in range(num_actors)]
-        infos = [None for _ in range(num_actors)]
-
+        rews = torch.zeros((num_actors,)).to(device)
+        dones = torch.zeros((num_actors,))
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():
                 acts = batch_actors(obs)
-                obs, rew, done, info = self.vec_env.step(acts)
+                obs, rew, dones, info = self.vec_env.step(acts)
+                rews += rew
+
+        runtime = time.time() - start_time
+        log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
+
+        if not init_mode:  # if init_map() is running, we don't need to do this
+            # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
+            self.request_new_batch.emit()
+        else:
+            self.request_from_init_map.emit()
+
+        ep_lengths = info['ep_lengths']
+        frames = sum(ep_lengths).cpu().numpy()
+        bds = info['desc'].cpu().numpy()  # behavior descriptors
+        rews = rews.cpu().numpy()
+
+        # metadata, runtime, frames, evals = self._map_agents(actors, mutated_actor_keys, bds, rews, runtime, frames)
+        metadata, evals = [], 0
+        self.eval_results.emit(self.object_id, metadata, runtime, frames, evals)
 
 
 
@@ -175,8 +195,7 @@ class Evaluator(EventLoopObject):
                                genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
                                phenotype=desc, fitness=rew)
             actor.id = agent.get_next_id()
-            niche_index = self.kdt.query([desc], k=1)[1][0][
-                0]  # get the closest voronoi cell to the behavior descriptor
+            niche_index = self.kdt.query([desc], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
             niche = self.kdt.data[niche_index]
             n = cm.make_hashable(niche)
             agent.centroid = n
