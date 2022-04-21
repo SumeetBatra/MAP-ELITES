@@ -6,7 +6,7 @@ import time
 from itertools import count
 from utils.vectorized import BatchMLP
 from utils.logger import log
-from utils.signal_slot import EventLoopObject, signal
+from utils.signal_slot import EventLoopObject, signal, EventLoopProcess
 from map_elites import common as cm
 from collections import deque
 from envs.isaacgym.make_env import make_gym_env
@@ -55,7 +55,8 @@ class Evaluator(EventLoopObject):
                  num_gpus,
                  kdt,
                  event_loop,
-                 object_id):
+                 object_id,
+                 gpu_id):
         '''
         A class for batch evaluations of mutated policies
         '''
@@ -70,10 +71,11 @@ class Evaluator(EventLoopObject):
         self.num_gpus = num_gpus
         self.kdt = kdt
         self.eval_id = 0
+        self.gpu_id = gpu_id
 
 
     @signal
-    def done(self): pass
+    def stop(self): pass
 
     @signal
     def eval_results(self): pass
@@ -88,7 +90,7 @@ class Evaluator(EventLoopObject):
     def init_elites_map(self): pass
 
     def init_env(self):
-        self.vec_env = make_gym_env(self.cfg)
+        self.vec_env = make_gym_env(self.cfg, graphics_device_id=self.gpu_id)
         self.init_elites_map.emit()
 
     def on_evaluate(self, var_id, mutated_actor_keys, init_mode):
@@ -107,7 +109,7 @@ class Evaluator(EventLoopObject):
         num_actors = len(actors)
 
         self.vec_env.seed(int((self.seed * 100) * self.eval_id))
-        self.eval_id + 1
+        self.eval_id += 1
         obs = self.vec_env.reset()['obs']  # isaac gym returns dict that contains obs
 
         rews = torch.zeros((num_actors,)).to(device)
@@ -192,10 +194,12 @@ class Evaluator(EventLoopObject):
         return next(i for i in range(len(self.all_actors)) if self.all_actors[i][1] == UNUSED)
 
     def close_envs(self):
-        for env in self.env:
-            env.close()
+        self.vec_env.close()
 
-    def on_stop(self):
+    def on_stop(self, oid):
         self.close_envs()
-        self.done.emit(self.object_id)
+        self.stop.emit(self.object_id)
+        if isinstance(self.event_loop.process, EventLoopProcess):
+            self.event_loop.stop()
+        self.detach()
         log.debug('Done!')

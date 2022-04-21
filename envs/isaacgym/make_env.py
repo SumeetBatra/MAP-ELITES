@@ -30,7 +30,7 @@ class IsaacGymVecEnv(gym.Env):
         self.env.render()  # ??
 
 
-def make_gym_env(cfg=None, env_config=None):
+def make_gym_env(cfg=None, env_config=None, graphics_device_id=0):
     task_name = 'ant'
 
     cfg_dir = os.path.join(os.getcwd(), 'envs/isaacgym/cfg')
@@ -41,7 +41,6 @@ def make_gym_env(cfg=None, env_config=None):
 
     sim_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     task_cfg['env']['numEnvs'] = cfg.num_agents
-    graphics_device_id = 0
 
     env = isaacgym_task_map[task_name](
         cfg=task_cfg,

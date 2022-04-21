@@ -6,7 +6,7 @@ import copy
 
 from utils.logger import log
 from utils.vectorized import BatchMLP
-from utils.signal_slot import EventLoopObject, signal, Timer
+from utils.signal_slot import EventLoopObject, EventLoopProcess, signal, Timer
 
 
 class VariationOperator(EventLoopObject):
@@ -70,18 +70,18 @@ class VariationOperator(EventLoopObject):
     def to_evaluate(self): pass
 
     @signal
-    def done(self): pass
-
-    @signal
     def stop(self): pass
 
     def on_stop(self):
-        self.done.emit(self.object_id)
+        self.stop.emit(self.object_id)
+        if isinstance(self.event_loop.process, EventLoopProcess):
+            self.event_loop.stop()
+        self.detach()
 
     def on_eval_results(self, oid, agents, evaluated_actors_keys, frames):
         num_eval = len(agents)
         self.queued_for_eval -= num_eval
-        log.debug(f'Received {len(agents)} processed agents, {self.queued_for_eval=}')
+        log.debug(f'Received {len(agents)} processed agents from {oid}, {self.queued_for_eval=}')
 
     def maybe_mutate_new_batch(self):
         if self.queued_for_eval < 2 * self.cfg.num_agents:

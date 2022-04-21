@@ -1,41 +1,5 @@
 #! /usr/bin/env python
-#| This file is a part of the pymap_elites framework.
-#| Copyright 2019, INRIA
-#| Main contributor(s):
-#| Jean-Baptiste Mouret, jean-baptiste.mouret@inria.fr
-#| Eloise Dalin , eloise.dalin@inria.fr
-#| Pierre Desreumaux , pierre.desreumaux@inria.fr
-#|
-#|
-#| **Main paper**: Mouret JB, Clune J. Illuminating search spaces by
-#| mapping elites. arXiv preprint arXiv:1504.04909. 2015 Apr 20.
-#|
-#| This software is governed by the CeCILL license under French law
-#| and abiding by the rules of distribution of free software.  You
-#| can use, modify and/ or redistribute the software under the terms
-#| of the CeCILL license as circulated by CEA, CNRS and INRIA at the
-#| following URL "http://www.cecill.info".
-#|
-#| As a counterpart to the access to the source code and rights to
-#| copy, modify and redistribute granted by the license, users are
-#| provided only with a limited warranty and the software's author,
-#| the holder of the economic rights, and the successive licensors
-#| have only limited liability.
-#|
-#| In this respect, the user's attention is drawn to the risks
-#| associated with loading, using, modifying and/or developing or
-#| reproducing the software by the user in light of its specific
-#| status of free software, that may mean that it is complicated to
-#| manipulate, and that also therefore means that it is reserved for
-#| developers and experienced professionals having in-depth computer
-#| knowledge. Users are therefore encouraged to load and test the
-#| software's suitability as regards their requirements in conditions
-#| enabling the security of their systems and/or data to be ensured
-#| and, more generally, to use and operate it in the same conditions
-#| as regards security.
-#|
-#| The fact that you are presently reading this means that you have
-#| had knowledge of the CeCILL license and that you accept its terms.
+
 import copy
 import math
 import numpy as np
@@ -72,6 +36,8 @@ EVALUATED = 3
 
 EVAL_CACHE_SIZE = 500
 
+GPU_ID = 0
+
 
 def __add_to_archive(s, centroid, archive, kdt):
     niche_index = kdt.query([centroid], k=1)[1][0][0]
@@ -88,7 +54,7 @@ def __add_to_archive(s, centroid, archive, kdt):
         return 1
 
 
-def compute_gpu(cfg, actors_file, filename, save_path, n_niches=1000, max_evals=1e5):
+def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     # for shared objects
     manager = multiprocessing.Manager()
 
@@ -110,19 +76,10 @@ def compute_gpu(cfg, actors_file, filename, save_path, n_niches=1000, max_evals=
     # create the map of elites
     elites_map = manager.dict()
 
-    # variables for logging
-    n_evals = 0
-    cp_evals = 0
-    steps = 0
-
-    eval_in_queue = Queue(max_size_bytes=int(1e6))
-
     runner = Runner(cfg, agent_archive, elites_map, eval_cache, all_actors, kdt, actors_file, filename)
 
     # do variation and evaluation in a subprocess
     var_loop = EventLoopProcess('var_loop')
-    eval_loop = EventLoopProcess('eval_loop')
-
     variation_op = VariationOperator(cfg,
                                      all_actors,
                                      elites_map,
@@ -142,20 +99,42 @@ def compute_gpu(cfg, actors_file, filename, save_path, n_niches=1000, max_evals=
                                      iso_sigma=cfg.iso_sigma,
                                      line_sigma=cfg.line_sigma)
 
-    evaluator = Evaluator(cfg,
-                          all_actors,
-                          eval_cache,
-                          elites_map,
-                          cfg.batch_size,
-                          cfg.seed,
-                          cfg.num_gpus,
-                          kdt,
-                          event_loop=eval_loop.event_loop,
-                          object_id='evaluator')
+    evaluators, eval_loops = [], []
+    global GPU_ID
+    for i in range(cfg.num_evaluators):
+        eval_loop_i = EventLoopProcess(f'eval loop {i}')
+        evaluator = Evaluator(cfg,
+                              all_actors,
+                              eval_cache,
+                              elites_map,
+                              cfg.batch_size,
+                              cfg.seed,
+                              cfg.num_gpus,
+                              kdt,
+                              event_loop=eval_loop_i.event_loop,
+                              object_id=f'evaluator {i}',
+                              gpu_id=GPU_ID)
+        evaluators.append(evaluator)
+        eval_loops.append(eval_loop_i)
+        GPU_ID = (GPU_ID + 1) % cfg.num_gpus
 
-    runner.init_loops(variation_op, evaluator)
-    eval_loop.start()
+
+    # evaluator = Evaluator(cfg,
+    #                       all_actors,
+    #                       eval_cache,
+    #                       elites_map,
+    #                       cfg.batch_size,
+    #                       cfg.seed,
+    #                       cfg.num_gpus,
+    #                       kdt,
+    #                       event_loop=eval_loop.event_loop,
+    #                       object_id='evaluator')
+
+    runner.init_loops(variation_op, evaluators)
+    for eval_loop in eval_loops:
+        eval_loop.start()
     var_loop.start()
-    runner.event_loop.exec()
+    runner.run()
     var_loop.join()
-    eval_loop.join()
+    for eval_loop in eval_loops:
+        eval_loop.join()

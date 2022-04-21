@@ -1,3 +1,4 @@
+import shutil
 import time
 import os
 import json
@@ -7,9 +8,11 @@ import wandb
 from collections import deque
 from utils.signal_slot import EventLoop, EventLoopObject, EventLoopProcess, signal, Timer
 from utils.logger import log
-from utils.utils import cfg_dict
+from utils.utils import cfg_dict, get_checkpoints
 from map_elites import common as cm
-from map_elites.evaluator import Individual, UNUSED, MAPPED
+from map_elites.evaluator import Individual, UNUSED, MAPPED, Evaluator
+from map_elites.variation import VariationOperator
+from typing import List
 
 
 class Runner(EventLoopObject):
@@ -37,7 +40,8 @@ class Runner(EventLoopObject):
         self.max_evals = cfg.max_evals
 
         # other event loops
-        self.variation_op, self.evaluator = None, None
+        self.variation_op, self.evaluators = None, None
+        self.component_ids = []  # Other EventLoopObject component ids
 
         # logging variables
         self.avg_stats_intervals = (2, 12, 60)  # 10 seconds, 1 minute, 5 minutes
@@ -70,7 +74,7 @@ class Runner(EventLoopObject):
         fit_list = []
         for agent in metadata:
             fit_list.append(agent.fitness)
-            self.archive.append(agent)
+            self.archive.append(agent)  # add Individual to archive of individuals
             self.actors_file.write("{} {} {} {} {} {} {} {} {} {}\n".format(self.total_evals,
                                                                        agent.genotype_id,
                                                                        agent.fitness,
@@ -82,14 +86,15 @@ class Runner(EventLoopObject):
                                                                        agent.genotype_novel,
                                                                        agent.genotype_delta_f))
             self.actors_file.flush()
-            self._log_metadata(fit_list)
-            self._maybe_stop_training()
+        self._log_metadata(fit_list)
+        self._maybe_stop_training()
 
     def _log_metadata(self, fit_list):
         # write log
         log.info(f'n_evals: {self.total_evals}, mean fitness: {np.mean(fit_list)}, median fitness: {np.median(fit_list)}, \
             5th percentile: {np.percentile(fit_list, 5)}, 95th percentile: {np.percentile(fit_list, 95)}')
         fit_list = np.array(fit_list)
+        log.info(f'Elites map now contains {len(self.elites_map)} solutions')
         if self.cfg['use_wandb']:
             wandb.log({
                 "evals": self.total_evals,
@@ -100,14 +105,21 @@ class Runner(EventLoopObject):
                 "env steps": self.total_env_steps
             })
 
-
     def save_checkpoint(self):
+        log.debug(f'Saving checkpoint...')
         checkpoint_name = f'checkpoint_{self.total_evals:09d}/'
         filepath = os.path.join(self.checkpoints_dir, checkpoint_name)
         if not os.path.exists(filepath):
             os.makedirs(filepath)
         self._save_archive(self.archive, self.all_actors, self.total_evals, self.filename, save_path=filepath, save_models=True)
         self._save_cfg(self.cfg, filepath)
+
+        # delete old checkpoints
+        while len(get_checkpoints(self.cfg.checkpoint_dir)) > self.cfg.keep_checkpoints:
+            oldest_checkpoint = get_checkpoints(self.cfg.checkpoint_dir)[0]
+            if os.path.exists(oldest_checkpoint):
+                log.debug('Removing %s', oldest_checkpoint)
+                shutil.rmtree(oldest_checkpoint)
 
     def _find_available_agent_id(self):
         '''
@@ -206,34 +218,76 @@ class Runner(EventLoopObject):
         log.debug(f'Evals/sec (EPS) 10 sec: {eps[0]}, 60 sec: {eps[1]}, 300 sec: {eps[2]}, '
                   f'FPS 10 sec: {fps[0]}, 60 sec: {fps[1]}, 300 sec: {fps[2]}')
 
+        if self.cfg.use_wandb:
+            wandb.log({
+                'fps': fps[2],
+                'eps': eps[2]
+            })
+
         self._last_report = now
         return fps[2], eps[2]
 
     def _maybe_stop_training(self):
         if self.total_evals >= self.max_evals:
+            log.debug('Finished training. Saving the archive...')
             cm.save_archive(self.archive, self.all_actors, self.total_evals, self.filename, self.cfg.save_path)
             self._save_cfg(self.cfg, self.cfg.save_path)
             self.stopped = True
             self.stop.emit()
 
-    def init_loops(self, variation_op, evaluator):
+    def _on_component_stopped(self, oid):
+        log.debug(f'Stopping component {oid=}')
+        for i, id in enumerate(self.component_ids):
+            if id == oid:
+                del self.component_ids[i]
+
+        if not self.component_ids:
+            self.event_loop.stop()
+
+    def init_loops(self, variation_op, evaluators):
         '''
         This is where we connect signals to slots and start various event loops for training
         :param variation_op: Variation worker mutates the policies
         :param evaluator: Evaluates the fitness of mutated policies
         '''
-        self.variation_op, self.evaluator = variation_op, evaluator
+        self.variation_op: VariationOperator = variation_op
+        self.evaluators: List[Evaluator] = evaluators
 
         # on startup
-        self.event_loop.start.connect(self.evaluator.init_env)  # initialize the envs after we spawn the eval's process so that we don't need to pickle the gym
-        self.evaluator.init_elites_map.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
-        self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
-        self.evaluator.request_new_batch.connect(self.variation_op.evolve_batch)  # evaluator requests more mutated policies when its finished evaluating the current batch
-        self.evaluator.request_from_init_map.connect(self.variation_op.init_map)
+        # self.event_loop.start.connect(self.evaluator.init_env)  # initialize the envs after we spawn the eval's process so that we don't need to pickle the gym
+        # self.evaluator.init_elites_map.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
+        # self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
+
+        for evaluator in self.evaluators:
+            # start the evaluators
+            self.event_loop.start.connect(evaluator.init_env)
+            evaluator.init_elites_map.connect(self.variation_op.init_map)
+            self.variation_op.to_evaluate.connect(evaluator.on_evaluate)
+
+            # auxiliary connections for logging
+            evaluator.eval_results.connect(self.on_eval_results)
+            evaluator.eval_results.connect(self.variation_op.on_eval_results)
+
+            # stop the evaluators
+            self.variation_op.stop.connect(evaluator.on_stop)
+            evaluator.stop.connect(self._on_component_stopped)
+
         # auxiliary connections for logging
-        self.evaluator.eval_results.connect(self.on_eval_results)
-        self.evaluator.eval_results.connect(self.variation_op.on_eval_results)
+        # self.evaluator.eval_results.connect(self.on_eval_results)
+        # self.evaluator.eval_results.connect(self.variation_op.on_eval_results)
 
         # stop everything when training completes
         self.stop.connect(self.variation_op.on_stop)  # runner stops the variation worker
-        self.variation_op.stop.connect(self.evaluator.on_stop)  # variation worker stops the evaluator
+        # self.variation_op.stop.connect(self.evaluator.on_stop)  # variation worker stops the evaluator
+
+        self.component_ids = [variation_op.object_id] + [eval.object_id for eval in self.evaluators]
+        self.variation_op.stop.connect(self._on_component_stopped)
+        # self.evaluator.stop.connect(self._on_component_stopped)
+
+    def run(self):
+        try:
+            self.event_loop.exec()
+            self.stop.emit()
+        except KeyboardInterrupt:
+            log.debug(f'Detected keyboard interrupt in {self.object_id}')
+            self.stop.emit()

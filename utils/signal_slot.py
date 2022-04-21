@@ -11,8 +11,8 @@ from typing import Dict, Any, Set, Callable, Union, List, Optional, Iterable, Tu
 
 import psutil
 
-from queues import get_mp_queue
-from logger import log
+from utils.queues import get_mp_queue
+from utils.logger import log
 
 # type aliases for clarity
 ObjectID = Any  # ObjectID can be any hashable type, usually a string

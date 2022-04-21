@@ -27,7 +27,6 @@ def str2bool(v):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--task', type=str, default='Ant', help='Which environment to train on')
-    parser.add_argument('--num_workers', type=int, default=-1, help='# of cores to use. -1 means use all cores')
     parser.add_argument('--seed', type=int, default=0, help='seed')
     parser.add_argument('--n_niches', type=int, default=1296, help='number of niches/cells of behavior')
     parser.add_argument('--cvt_samples', type=int, default=25000, help='# of samples for computing cvt clusters. Larger value --> higher quality CVT')
@@ -41,14 +40,12 @@ def parse_args(argv=None):
     parser.add_argument('--save_period', default=500, type=int, help='How many evaluations b/w saving archives')
     parser.add_argument('--keep_checkpoints', default=2, type=int, help='Number of checkpoints of the elites to keep during training')
     parser.add_argument('--checkpoint_dir', default='./checkpoints', type=str, help='Where to save the checkpoints')
-    parser.add_argument('--cp_save_period_sec', default=500, type=int, help='How many evaluations b/w saving checkpoints')
+    parser.add_argument('--cp_save_period_sec', default=300, type=int, help='How many seconds b/w saving checkpoints. Default saves every 5 min')
     parser.add_argument('--use_wandb', default=True, type=str2bool, help='log results to weights and biases')
 
     # args for parallelization
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
-    parser.add_argument('--eval_workers_per_gpu', default=5, type=int, help='How many policy evaluators to run in parallel per gpu (different from number of policies to create a BatchMLP)')
-    parser.add_argument('--actors_batch_size', default=10, type=int, help='Number of policies used to create a BatchMLP')
-    parser.add_argument('--num_variation_workers', default=-1, type=int, help='Number of parallel processes performing crossover/mutation')
+    parser.add_argument('--num_evaluators', default=1, type=int, help='Number of evaluators for parallel policy evaluation. Best to set this to the number of gpus available on your system')
 
     # args for cross over and mutation of agent params
     parser.add_argument('--mutation_op', default=None, type=str, choices=['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation'], help='Type of mutation to perform. Leave as None to do no mutations')
@@ -102,7 +99,7 @@ def main():
         log.debug(f'{key}: {val}')
     log.debug('#' * 50)
 
-    filename = f'CVT-MAP-ELITES_BipedalWalkerV3_seed_{cfg.seed}_dim_map_{cfg.dim_map}'
+    filename = f'CVT-MAP-ELITES_QDAnt_seed_{cfg.seed}_dim_map_{cfg.dim_map}'
     file_save_path = os.path.join(cfg.save_path, filename)
     actors_file = open(file_save_path, 'w')
 
@@ -113,9 +110,7 @@ def main():
     compute_gpu(cfg,
                 actors_file,
                 filename,
-                cfg.save_path,
-                cfg.n_niches,
-                cfg.max_evals)
+                cfg.n_niches)
 
 
 if __name__ == '__main__':
