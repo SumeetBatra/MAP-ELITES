@@ -72,7 +72,7 @@ class Evaluator(EventLoopObject):
         self.kdt = kdt
         self.eval_id = 0
         self.gpu_id = gpu_id
-        self.sim_device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
+        self.sim_device = f'cuda:{self.gpu_id}'
 
 
     @signal
@@ -91,7 +91,7 @@ class Evaluator(EventLoopObject):
     def init_elites_map(self): pass
 
     def init_env(self):
-        self.vec_env = make_gym_env(sim_device=self.sim_device, cfg=self.cfg, graphics_device_id=self.gpu_id)
+        self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
         self.init_elites_map.emit()
 
     def on_evaluate(self, var_id, mutated_actor_keys, init_mode):

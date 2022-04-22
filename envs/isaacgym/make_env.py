@@ -30,7 +30,7 @@ class IsaacGymVecEnv(gym.Env):
         self.env.render()  # ??
 
 
-def make_gym_env(sim_device, cfg=None, env_config=None, graphics_device_id=0):
+def make_gym_env(cfg=None, env_config=None, graphics_device_id=0, sim_device='cuda:0'):
     task_name = 'ant'
 
     cfg_dir = os.path.join(os.getcwd(), 'envs/isaacgym/cfg')
