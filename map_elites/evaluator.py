@@ -90,7 +90,7 @@ class Evaluator(EventLoopObject):
     def init_elites_map(self): pass
 
     def init_env(self):
-        self.vec_env = make_gym_env(self.cfg, graphics_device_id=self.gpu_id)
+        self.vec_env = make_gym_env(self.cfg, sim_device=self.gpu_id, graphics_device_id=self.gpu_id)
         self.init_elites_map.emit()
 
     def on_evaluate(self, var_id, mutated_actor_keys, init_mode):
