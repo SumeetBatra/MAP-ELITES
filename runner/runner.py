@@ -36,6 +36,7 @@ class Runner(EventLoopObject):
         self.checkpoints_dir = self.cfg.checkpoint_dir
         self.actors_file = actors_file
         self.filename = filename
+        self.unused_keys = list(range(len(self.all_actors)))
 
         # hyperparams
         self.max_evals = cfg.max_evals
@@ -129,7 +130,9 @@ class Runner(EventLoopObject):
         If an agent maps to a new cell in the elites map, need to give it a new, unused id from the pool of agents
         :returns an agent id that's not being used by some other agent in the elites map
         '''
-        return next(i for i in range(len(self.all_actors)) if self.all_actors[i][1] == UNUSED)
+        agent_id = self.unused_keys[0]
+        del self.unused_keys[0]
+        return agent_id
 
     def _map_agents(self, agents, evaluated_actors_keys):
         '''

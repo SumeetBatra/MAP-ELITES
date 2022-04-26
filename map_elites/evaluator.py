@@ -77,7 +77,6 @@ class Evaluator(EventLoopObject):
         self.gpu_id = gpu_id
         self.sim_device = f'cuda:{self.gpu_id}'
 
-
     @signal
     def stop(self): pass
 

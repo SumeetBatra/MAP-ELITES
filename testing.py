@@ -5,7 +5,8 @@ import pandas as pd
 from models.bipedal_walker_model import BipedalWalkerNN
 from models.ant_model import AntNN
 import torch
-from torch.multiprocessing import Process
+from torch.multiprocessing import Process, Value
+from multiprocessing import shared_memory
 import torch.multiprocessing as multiprocessing
 from enjoy_bipedal_walker import enjoy
 from faster_fifo import Queue
@@ -38,6 +39,9 @@ def job1(a, t=None):
 def job2(a, t=None):
     s = a[0]
     s.p1 += 1
+
+def job3(arr, idx):
+    arr[idx] = 1
 
 
 class Species(AntNN):
@@ -86,3 +90,12 @@ if __name__ == '__main__':
     p2.join()
     print('After: ', a[0].summary())
     print(t)
+
+    arr = torch.tensor([0, 0, 0, 0, 0])
+    p3 = Process(target=job3, args=(arr, 0))
+    p4 = Process(target=job3, args=(arr, 2))
+    p3.start()
+    p4.start()
+    p3.join()
+    p4.join()
+    print(arr)
