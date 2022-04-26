@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 import time
 
+from torch.multiprocessing import Value
 from itertools import count
 from utils.vectorized import BatchMLP
 from utils.logger import log
@@ -14,6 +15,8 @@ from envs.isaacgym.make_env import make_gym_env
 # flags for the archive
 UNUSED = 0
 MAPPED = 1
+TO_EVALUATE = 2
+EVALUATED = 3
 
 class Individual(object):
     _ids = count(0)
@@ -105,7 +108,7 @@ class Evaluator(EventLoopObject):
     def evaluate_batch(self, mutated_actor_keys, init_mode=False):
         start_time = time.time()
         actors = self.eval_cache[mutated_actor_keys]
-        device = torch.device(f'cuda:0' if torch.cuda.is_available() else 'cpu')
+        device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
 

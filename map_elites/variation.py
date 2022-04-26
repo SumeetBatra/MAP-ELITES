@@ -114,7 +114,9 @@ class VariationOperator(EventLoopObject):
                 actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
 
             # place in eval cache for Evaluator to evaluate
-            self.eval_cache[actor_x_ids] = actors_z
+            cached_actors = self.eval_cache[actor_x_ids]
+            for p_cache, pz in zip(cached_actors, actors_z):
+                p_cache.load_state_dict(pz.state_dict())
             self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
             self.queued_for_eval += len(actor_x_ids)
         else:
@@ -162,7 +164,9 @@ class VariationOperator(EventLoopObject):
             actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
 
         # place in eval cache for Evaluator to evaluate
-        self.eval_cache[actor_x_ids] = actors_z
+        cached_actors = self.eval_cache[actor_x_ids]
+        for p_cache, pz in zip(cached_actors, actors_z):
+            p_cache.load_state_dict(pz.state_dict())
         self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
         self.queued_for_eval += len(actor_x_ids)
 

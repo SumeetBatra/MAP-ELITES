@@ -1,10 +1,12 @@
-import torch
+from envs.isaacgym.make_env import make_gym_env
 import numpy as np
 import time
-import torch.multiprocessing as mp
-from torch.multiprocessing import Process
 import pandas as pd
 from models.bipedal_walker_model import BipedalWalkerNN
+from models.ant_model import AntNN
+import torch
+from torch.multiprocessing import Process
+import torch.multiprocessing as multiprocessing
 from enjoy_bipedal_walker import enjoy
 from faster_fifo import Queue
 from functools import partial
@@ -24,12 +26,40 @@ sigma = np.ones(1000)
 # 581804
 # 701314 - walking
 
-def job1(x, dq):
-    dq.append(x)
+def job1(a, t=None):
+    s1 = a[0]
+    s2 = Species()
+    # with torch.no_grad():
+    #     for p1, p2 in zip(s1.parameters(), s2.parameters()):
+    #         p1.copy_(p2)
+    with torch.no_grad():
+        s1.load_state_dict(s2.state_dict())
+
+def job2(a, t=None):
+    s = a[0]
+    s.p1 += 1
+
+
+class Species(AntNN):
+    def __init__(self):
+        super().__init__()
+        self.p1 = torch.tensor(-1).to(device).share_memory_()
+        self.p2 = None
+        self.t = torch.tensor(5).to(device)
+
+    def summary(self):
+        print(f'{self.p1=}, {self.p2=}, {s.t=}')
+        for n, p in self.named_parameters():
+            print(n, p)
+
 
 
 
 if __name__ == '__main__':
+    try:
+        multiprocessing.set_start_method('spawn', force=True)  # cuda only works with this method
+    except RuntimeError:
+        pass
     # filepath = './checkpoints/checkpoint_002790022/archive_CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_2790022.dat'
     # df = pd.read_csv(filepath, sep=' ')
     # df = df.to_numpy()[:, :-1]
@@ -44,11 +74,15 @@ if __name__ == '__main__':
     #     print(f'Running policy {int(policy_id)}')
     #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
     #     enjoy(policy_path, render=True)
-    lock = mp.Lock()
-    x = 1
-    dq = deque([])
-    p1 = Process(target=job1, args=(x, dq))
-    p2 = Process(target=job1, args=(x+1, dq))
-    print(dq)
+    t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
+    s = Species().share_memory()
+    a = [s]
+    print('Before: ', a[0].summary())
+    p1 = Process(target=job1, args=(a, t))
+    p2 = Process(target=job2, args=(a, t))
     p1.start()
     p2.start()
+    p1.join()
+    p2.join()
+    print('After: ', a[0].summary())
+    print(t)

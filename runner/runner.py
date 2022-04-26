@@ -3,6 +3,7 @@ import time
 import os
 import json
 import numpy as np
+import torch
 import wandb
 
 from collections import deque
@@ -10,7 +11,7 @@ from utils.signal_slot import EventLoop, EventLoopObject, EventLoopProcess, sign
 from utils.logger import log
 from utils.utils import cfg_dict, get_checkpoints
 from map_elites import common as cm
-from map_elites.evaluator import Individual, UNUSED, MAPPED, Evaluator
+from map_elites.evaluator import Evaluator, UNUSED, MAPPED
 from map_elites.variation import VariationOperator
 from typing import List
 
@@ -86,7 +87,7 @@ class Runner(EventLoopObject):
                                                                        agent.genotype_novel,
                                                                        agent.genotype_delta_f))
             self.actors_file.flush()
-        self._log_metadata(fit_list)
+        self._log_metadata(fit_list) if len(fit_list) > 0 else log.debug('No metadata to log!')
         self._maybe_stop_training()
 
     def _log_metadata(self, fit_list):
@@ -153,14 +154,18 @@ class Runner(EventLoopObject):
                     self.elites_map[n] = (map_agent_id, agent.fitness)
                     agent.genotype = map_agent_id
                     # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
-                    self.all_actors[map_agent_id] = (policy, MAPPED)
+                    stored_actor, _ = self.all_actors[map_agent_id]
+                    stored_actor.load_state_dict(policy.state_dict())
+                    self.all_actors[map_agent_id] = (stored_actor, MAPPED)
                     added = True
             else:
                 # need to find a new, unused agent id since this agent maps to a new cell
                 agent_id = self._find_available_agent_id()
                 self.elites_map[n] = (agent_id, agent.fitness)
                 agent.genotype = agent_id
-                self.all_actors[agent_id] = (policy, MAPPED)
+                stored_actor, _ = self.all_actors[agent_id]
+                stored_actor.load_state_dict(policy.state_dict())
+                self.all_actors[agent_id] = (stored_actor, MAPPED)
                 added = True
 
             if added:

@@ -12,12 +12,13 @@ import shutil
 import glob
 import torch
 import torch.multiprocessing as multiprocessing
+from torch.multiprocessing import Value
 from sklearn.neighbors import KDTree
 from models.ant_model import ant_model_factory
 from models.bipedal_walker_model import bpwalker_model_factory
 from faster_fifo import Queue
 from map_elites.variation import VariationOperator
-from map_elites.evaluator import Evaluator, Individual
+from map_elites.evaluator import Evaluator, UNUSED, MAPPED
 from torch.multiprocessing import Process as TorchProcess, Pipe
 
 from map_elites import common as cm
@@ -28,14 +29,8 @@ from runner.runner import Runner
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
-# flags for the archive
-UNUSED = 0
-MAPPED = 1
-TO_EVALUATE = 2
-EVALUATED = 3
 
 EVAL_CACHE_SIZE = 500
-
 GPU_ID = 0
 
 
@@ -117,18 +112,6 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
         evaluators.append(evaluator)
         eval_loops.append(eval_loop_i)
         GPU_ID = (GPU_ID + 1) % cfg.num_gpus
-
-
-    # evaluator = Evaluator(cfg,
-    #                       all_actors,
-    #                       eval_cache,
-    #                       elites_map,
-    #                       cfg.batch_size,
-    #                       cfg.seed,
-    #                       cfg.num_gpus,
-    #                       kdt,
-    #                       event_loop=eval_loop.event_loop,
-    #                       object_id='evaluator')
 
     runner.init_loops(variation_op, evaluators)
     for eval_loop in eval_loops:
