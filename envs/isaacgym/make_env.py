@@ -40,6 +40,7 @@ def make_gym_env(cfg=None, env_config=None, graphics_device_id=0, sim_device='cu
         task_cfg = yaml.safe_load(yaml_stream)
 
     task_cfg['env']['numEnvs'] = cfg.num_agents
+    task_cfg['rl_device'] = sim_device
 
     env = isaacgym_task_map[task_name](
         cfg=task_cfg,
