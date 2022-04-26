@@ -87,10 +87,12 @@ class Runner(EventLoopObject):
                                                                        agent.genotype_novel,
                                                                        agent.genotype_delta_f))
             self.actors_file.flush()
-        self._log_metadata(fit_list) if len(fit_list) > 0 else log.debug('No metadata to log!')
+        self._log_metadata()
         self._maybe_stop_training()
 
-    def _log_metadata(self, fit_list):
+    def _log_metadata(self):
+        elites = self.elites_map.values()
+        fit_list = [x[1] for x in elites]
         # write log
         log.info(f'n_evals: {self.total_evals}, mean fitness: {np.mean(fit_list)}, median fitness: {np.median(fit_list)}, \
             5th percentile: {np.percentile(fit_list, 5)}, 95th percentile: {np.percentile(fit_list, 95)}')
