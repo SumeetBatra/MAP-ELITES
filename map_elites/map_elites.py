@@ -73,12 +73,16 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
 
     runner = Runner(cfg, agent_archive, elites_map, eval_cache, all_actors, kdt, actors_file, filename)
 
+    # one eval queue shared b/w Variation worker and all eval workers
+    eval_in_queue = Queue()
+
     # do variation and evaluation in a subprocess
     var_loop = EventLoopProcess('var_loop')
     variation_op = VariationOperator(cfg,
                                      all_actors,
                                      elites_map,
                                      eval_cache,
+                                     eval_in_queue,
                                      event_loop=var_loop.event_loop,
                                      object_id='variation worker',
                                      crossover_op=cfg.crossover_op,
@@ -102,6 +106,7 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
                               all_actors,
                               eval_cache,
                               elites_map,
+                              eval_in_queue,
                               cfg.batch_size,
                               cfg.seed,
                               cfg.num_gpus,

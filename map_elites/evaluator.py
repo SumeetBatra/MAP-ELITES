@@ -53,6 +53,7 @@ class Evaluator(EventLoopObject):
                  all_actors,
                  eval_cache,
                  elites_map,
+                 eval_in_queue,
                  batch_size,
                  seed,
                  num_gpus,
@@ -69,6 +70,7 @@ class Evaluator(EventLoopObject):
         self.all_actors = all_actors
         self.eval_cache = eval_cache
         self.elites_map = elites_map
+        self.eval_in_queue = eval_in_queue
         self.batch_size = batch_size
         self.seed = seed
         self.num_gpus = num_gpus
@@ -96,12 +98,13 @@ class Evaluator(EventLoopObject):
         self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
         self.init_elites_map.emit()
 
-    def on_evaluate(self, var_id, mutated_actor_keys, init_mode):
+    def on_evaluate(self, var_id, init_mode):
         '''
         Evaluate a new batch of mutated policies
         :param var_id: Variation Worker that mutated the actors
         :param mutated_actor_keys: locations in the eval cache that hold the mutated policies
         '''
+        mutated_actor_keys = self.eval_in_queue.get()
         self.evaluate_batch(mutated_actor_keys, init_mode)
 
     def evaluate_batch(self, mutated_actor_keys, init_mode=False):

@@ -15,6 +15,7 @@ class VariationOperator(EventLoopObject):
                  all_actors,
                  elites_map,
                  eval_cache,
+                 eval_in_queue,
                  event_loop,
                  object_id,
                  crossover_op='iso_dd',
@@ -35,6 +36,7 @@ class VariationOperator(EventLoopObject):
         self.all_actors = all_actors
         self.elites_map = elites_map
         self.eval_cache = eval_cache
+        self.eval_in_queue = eval_in_queue
         self.init_mode = True
         self.queued_for_eval = 0  # want to always keep some mutated policies queued so that the evaluator(s) are never waiting
 
@@ -117,8 +119,10 @@ class VariationOperator(EventLoopObject):
             cached_actors = self.eval_cache[actor_x_ids]
             for p_cache, pz in zip(cached_actors, actors_z):
                 p_cache.load_state_dict(pz.state_dict())
-            self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
             self.queued_for_eval += len(actor_x_ids)
+            actor_x_ids = np.split(actor_x_ids, self.cfg.num_evaluators)
+            self.eval_in_queue.put_many(actor_x_ids)
+            self.to_evaluate.emit(self.object_id, self.init_mode)
         else:
             log.debug('Finished elites map initialization!')
             self.init_mode = False
@@ -167,8 +171,10 @@ class VariationOperator(EventLoopObject):
         cached_actors = self.eval_cache[actor_x_ids]
         for p_cache, pz in zip(cached_actors, actors_z):
             p_cache.load_state_dict(pz.state_dict())
-        self.to_evaluate.emit(self.object_id, actor_x_ids, self.init_mode)
         self.queued_for_eval += len(actor_x_ids)
+        actor_x_ids = np.split(np.array(actor_x_ids), self.cfg.num_evaluators)
+        self.eval_in_queue.put_many(actor_x_ids)
+        self.to_evaluate.emit(self.object_id, self.init_mode)
 
 
     def evo(self, actor_x, actor_y, device, crossover_op=None, mutation_op=None):
