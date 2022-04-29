@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import cloudpickle
 import pickle
+import numpy as np
 
 from torch import Tensor
 
@@ -9,12 +10,11 @@ from torch import Tensor
 
 
 class BatchLinearBlock(nn.Module):
-    def __init__(self, weights: Tensor, nonlinear, biases=None, device=None, dtype=None) -> None:
+    def __init__(self, weights: Tensor, biases=None, device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.weight = nn.Parameter(weights)  # one slice of all the mlps we want to process as a batch
         self.bias = nn.Parameter(biases)
-        self.nonlinear = nonlinear
 
     def forward(self, x:Tensor) -> Tensor:
         obs_per_weight = x.shape[0] // self.weight.shape[0]
@@ -24,8 +24,6 @@ class BatchLinearBlock(nn.Module):
         if self.bias is not None:
             y = torch.transpose(y, 0, 1)
             y += self.bias
-        if self.nonlinear is not None:
-            y = self.nonlinear(y)
 
         out_features = self.weight.shape[1]
         y = torch.reshape(y, shape=(-1, out_features))
@@ -36,6 +34,7 @@ class BatchMLP(nn.Module):
     def __init__(self, mlps, device):
         super().__init__()
         self.mlps = mlps
+        assert isinstance(self.mlps, np.ndarray), 'mlps should be passed as a numpy ndarray'
         self.num_mlps = len(mlps)
         self.device = device
         self.blocks = self._slice_mlps()
@@ -56,6 +55,11 @@ class BatchMLP(nn.Module):
         ids = [mlp.id for mlp in self.mlps]
         return ids
 
+    def replace_mlps(self, ids, mlps):
+        self.mlps[ids] = mlps
+        for name, weight in self.named_parameters():
+            weight.data[ids] = torch.stack([mlp.state_dict()[name] for mlp in mlps]).to(self.device)
+
     def _slice_mlps(self):
         num_layers = len(self.mlps[0].layers)
         blocks = []
@@ -68,8 +72,9 @@ class BatchMLP(nn.Module):
             slice_weights = torch.stack(slice_weights)
             slice_bias = torch.stack(slice_bias)
             nonlinear = self.mlps[0].layers[i+1] if i+1 < num_layers else None
-            block = BatchLinearBlock(slice_weights, nonlinear, slice_bias)
+            block = BatchLinearBlock(slice_weights, slice_bias)
             blocks.append(block)
+            blocks.append(nonlinear)
         return blocks
 
     def update_mlps(self):
@@ -79,9 +84,10 @@ class BatchMLP(nn.Module):
         '''
         for i, layer in enumerate(self.layers):
             for j in range(len(self.mlps)):
-                # 2 * i b/c every other layer is an activation
-                self.mlps[j].layers[2 * i].weight.data = layer.weight[i]
-                self.mlps[j].layers[2 * i].bias.data = layer.bias[i]
+                if not isinstance(self.mlps[j].layers[i], nn.Linear):
+                    continue
+                self.mlps[j].layers[i].weight.data = layer.weight[i]
+                self.mlps[j].layers[i].bias.data = layer.bias[i]
         return self.mlps
 
     def to_device(self, device):
