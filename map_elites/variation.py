@@ -80,7 +80,7 @@ class VariationOperator(EventLoopObject):
             self.event_loop.stop()
         self.detach()
 
-    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames):
+    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames, runtime, avg_ep_length):
         num_eval = len(agents)
         self.queued_for_eval -= num_eval
         log.debug(f'Received {len(agents)} processed agents from {oid}, {self.queued_for_eval=}')
