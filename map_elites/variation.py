@@ -96,15 +96,14 @@ class VariationOperator(EventLoopObject):
         rand_init_batch_size = self.cfg.random_init_batch
         log.debug('Initializing the map of elites')
         if len(self.elites_map) <= self.cfg.random_init:
-            keys = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
             actor_x_ids = []
             actor_y_ids = [None for _ in range(len(actor_x_ids))]
             if self.mutation_op and not self.crossover_op:
-                actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+                actor_x_ids = np.random.choice(range(len(self.all_actors)), size=rand_init_batch_size, replace=False)
 
             elif self.crossover_op:
-                actor_x_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
-                actor_y_ids = np.random.randint(len(self.all_actors), size=rand_init_batch_size)
+                actor_x_ids = np.random.choice(range(len(self.all_actors)), size=rand_init_batch_size, replace=False)
+                actor_y_ids = np.random.choice(range(len(self.all_actors)), size=rand_init_batch_size, replace=False)
 
             actors_x_evo = self.all_actors[actor_x_ids][:, 0]
             actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
@@ -147,13 +146,13 @@ class VariationOperator(EventLoopObject):
         actor_x_ids = []
         actor_y_ids = [None for _ in range(len(actor_x_ids))]
         if self.mutation_op and not self.crossover_op:
-            actor_x_inds = np.random.randint(len(keys), size=batch_size)
+            actor_x_inds = np.random.choice(range(len(keys)), size=batch_size, replace=False)
             for i in range(len(actor_x_inds)):
                 actor_x_ids += self.elites_map[keys[actor_x_inds[i]]]
 
         elif self.crossover_op:
-            actor_x_inds = np.random.randint(len(keys), size=batch_size)
-            actor_y_inds = np.random.randint(len(keys), size=batch_size)
+            actor_x_inds = np.random.choice(range(len(keys)), size=batch_size, replace=False)
+            actor_y_inds = np.random.choice(range(len(keys)), size=batch_size, replace=False)
             for i in range(len(actor_x_inds)):
                 actor_x_ids.append(self.elites_map[keys[actor_x_inds[i]]][0])
                 actor_y_ids.append(self.elites_map[keys[actor_y_inds[i]]][0])
