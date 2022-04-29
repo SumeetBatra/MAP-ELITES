@@ -70,9 +70,11 @@ class Runner(EventLoopObject):
     def last_report(self):
         return self._last_report
 
-    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames):
+    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames, runtime, avg_ep_length):
         metadata, evals = self._map_agents(agents, evaluated_actors_keys)
         self._update_training_stats(frames, evals)
+        if self.cfg.use_wandb:
+            wandb.log({'eval runtime': runtime, 'avg_ep_length': avg_ep_length})
         fit_list = []
         for agent in metadata:
             fit_list.append(agent.fitness)

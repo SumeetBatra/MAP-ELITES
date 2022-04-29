@@ -3,7 +3,7 @@ import numpy as np
 import time
 import pandas as pd
 from models.bipedal_walker_model import BipedalWalkerNN
-from models.ant_model import AntNN
+from models.ant_model import AntNN, ant_model_factory
 import torch
 from torch.multiprocessing import Process, Value
 from multiprocessing import shared_memory
@@ -12,6 +12,10 @@ from enjoy_bipedal_walker import enjoy
 from faster_fifo import Queue
 from functools import partial
 from collections import deque
+from utils.vectorized import BatchMLP
+from attrdict import AttrDict
+from envs.isaacgym.make_env import make_gym_env
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -78,24 +82,51 @@ if __name__ == '__main__':
     #     print(f'Running policy {int(policy_id)}')
     #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
     #     enjoy(policy_path, render=True)
-    t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
-    s = Species().share_memory()
-    a = [s]
-    print('Before: ', a[0].summary())
-    p1 = Process(target=job1, args=(a, t))
-    p2 = Process(target=job2, args=(a, t))
-    p1.start()
-    p2.start()
-    p1.join()
-    p2.join()
-    print('After: ', a[0].summary())
-    print(t)
+    # t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
+    # s = Species().share_memory()
+    # a = [s]
+    # print('Before: ', a[0].summary())
+    # p1 = Process(target=job1, args=(a, t))
+    # p2 = Process(target=job2, args=(a, t))
+    # p1.start()
+    # p2.start()
+    # p1.join()
+    # p2.join()
+    # print('After: ', a[0].summary())
+    # print(t)
+    #
+    # arr = torch.tensor([0, 0, 0, 0, 0])
+    # p3 = Process(target=job3, args=(arr, 0))
+    # p4 = Process(target=job3, args=(arr, 2))
+    # p3.start()
+    # p4.start()
+    # p3.join()
+    # p4.join()
+    # print(arr)
 
-    arr = torch.tensor([0, 0, 0, 0, 0])
-    p3 = Process(target=job3, args=(arr, 0))
-    p4 = Process(target=job3, args=(arr, 2))
-    p3.start()
-    p4.start()
-    p3.join()
-    p4.join()
-    print(arr)
+    cfg = AttrDict({'headless': True, 'num_agents': 1000})
+    vec_env = make_gym_env(cfg)
+    mlps = []
+    device = torch.device('cuda:0')
+    for _ in range(1000):
+        mlps.append(ant_model_factory(device))
+    batch_mlp = BatchMLP(mlps, device)
+    single_mlp = ant_model_factory(device)
+
+    data = torch.randn((1000, 60)).to(device)
+
+    batch_start = time.time()
+    for _ in range(100):
+        acts = batch_mlp(data)
+        vec_env.step(acts)
+    batch_time = time.time() - batch_start
+
+    single_start = time.time()
+    for _ in range(100):
+        acts = single_mlp(data)
+        vec_env.step(acts)
+    single_time = time.time() - single_start
+
+    print(f'Batch MLP took {batch_time:.2f} seconds, Single MLP took {single_time:.2f} seconds')
+
+

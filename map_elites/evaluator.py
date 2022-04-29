@@ -135,6 +135,7 @@ class Evaluator(EventLoopObject):
         #     self.request_from_init_map.emit()
 
         ep_lengths = info['ep_lengths']
+        avg_ep_length = torch.mean(ep_lengths)
         frames = sum(ep_lengths).cpu().numpy()
         bds = info['desc'].cpu().numpy()  # behavior descriptors
         rews = rews.cpu().numpy()
@@ -145,7 +146,7 @@ class Evaluator(EventLoopObject):
                                genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
                                phenotype=desc, fitness=rew)
             agents.append(agent)
-        self.eval_results.emit(self.object_id, agents, mutated_actor_keys, frames)
+        self.eval_results.emit(self.object_id, agents, mutated_actor_keys, frames, runtime, avg_ep_length)
 
     def _map_agents(self, actors, actor_keys, descs, rews, runtime, frames):
         '''
