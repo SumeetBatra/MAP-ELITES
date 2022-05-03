@@ -109,7 +109,11 @@ class Evaluator(EventLoopObject):
 
     def evaluate_batch(self, mutated_actor_keys, init_mode=False):
         start_time = time.time()
-        actors = self.eval_cache[mutated_actor_keys]
+        batch_actors = self.eval_cache[mutated_actor_keys]
+        # convert BatchMLPs to list of mlps
+        actors = np.array([])
+        for batch_actor in batch_actors:
+            actors = np.concatenate((actors, batch_actor.update_mlps()), axis=0)
         device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
@@ -120,12 +124,16 @@ class Evaluator(EventLoopObject):
 
         rews = torch.zeros((num_actors,)).to(device)
         dones = torch.zeros((num_actors,))
+        traj_len = 1000  # trajectory length for ant env, TODO: make this generic
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():
                 acts = batch_actors(obs)
                 obs, rew, dones, info = self.vec_env.step(acts)
                 rews += rew
+                ep_lengths = info['ep_lengths']
+                if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
+                    dones = torch.ones_like(dones)
 
         runtime = time.time() - start_time
         log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
@@ -141,64 +149,13 @@ class Evaluator(EventLoopObject):
         rews = rews.cpu().numpy()
 
         agents = []
-        for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys, bds, rews):
+        mutated_actor_keys_repeated = np.repeat(mutated_actor_keys, repeats=self.cfg.mutations_per_policy)  # repeat keys M times b/c actors parents were mutated M times
+        for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys_repeated, bds, rews):
             agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
                                genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
                                phenotype=desc, fitness=rew)
             agents.append(agent)
         self.eval_results.emit(self.object_id, agents, mutated_actor_keys, frames, runtime, avg_ep_length)
-
-    def _map_agents(self, actors, actor_keys, descs, rews, runtime, frames):
-        '''
-        Map the evaluated agents using their behavior descriptors. Send the metadata back to the main process for logging
-        :param behav_descs: behavior descriptors of a batch of evaluated agents
-        :param rews: fitness scores of a batch of evaluated agents
-        '''
-        metadata = []
-        evals = len(actors)
-        for actor, actor_key, desc, rew in zip(actors, actor_keys, descs, rews):
-            added = False
-            agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
-                               genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
-                               phenotype=desc, fitness=rew)
-            actor.id = agent.get_next_id()
-            niche_index = self.kdt.query([desc], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
-            niche = self.kdt.data[niche_index]
-            n = cm.make_hashable(niche)
-            agent.centroid = n
-            if n in self.elites_map:
-                # natural selection
-                map_agent_id, fitness = self.elites_map[
-                    n]  # TODO: make sure this interface is correctly implemented
-                if agent.fitness > fitness:
-                    self.elites_map[n] = (map_agent_id, agent.fitness)
-                    agent.genotype = map_agent_id
-                    # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
-                    self.all_actors[map_agent_id] = (actor, MAPPED)
-                    added = True
-            else:
-                # need to find a new, unused agent id since this agent maps to a new cell
-                agent_id = self._find_available_agent_id()
-                self.elites_map[n] = (agent_id, agent.fitness)
-                agent.genotype = agent_id
-                self.all_actors[agent_id] = (actor, MAPPED)
-                added = True
-
-            if added:
-                md = (
-                agent.genotype_id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
-                agent.parent_1_id, agent.parent_2_id, agent.genotype_type, agent.genotype_novel,
-                agent.genotype_delta_f)
-                metadata.append(agent)
-
-        return metadata, runtime, frames, evals
-
-    def _find_available_agent_id(self):
-        '''
-        If an agent maps to a new cell in the elites map, need to give it a new, unused id from the pool of agents
-        :returns an agent id that's not being used by some other agent in the elites map
-        '''
-        return next(i for i in range(len(self.all_actors)) if self.all_actors[i][1] == UNUSED)
 
     def close_envs(self):
         self.vec_env.close()

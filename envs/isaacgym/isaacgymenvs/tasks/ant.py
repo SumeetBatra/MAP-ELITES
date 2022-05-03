@@ -320,23 +320,17 @@ class QDAnt(Ant):
         self.behavior_desc = torch.zeros((self.num_envs, self.num_bd_dims)).to(self.device)
         self.behavior_desc_acc = torch.zeros((self.num_envs, self.num_bd_dims)).to(self.device)
         self.foot_length = 0.5656854249492381  # from the ant xml -> sqrt( .4^2 + .4^2)
-        self.all_dones = torch.zeros((self.num_envs,)).to(self.device)
 
     def step(self, actions):
         res = super().step(actions)
         obs, rews, dones, infos = res[0]['obs'], res[1], res[2], res[3]
         bds = self.get_behavior_descriptors(obs)
-        bds *= (1 - self.all_dones.view(-1, 1))  # only want to accumulate bds until the robot falls over or episode terminates
-        self.T += (1 - self.all_dones)
+        self.T += 1
         self.behavior_desc_acc += bds
         self.behavior_desc = self.behavior_desc_acc / self.T.view(-1, 1)
-        # TODO: better way to do this?
-        for i in range(len(dones)):
-            self.all_dones[i] = dones[i] or self.all_dones[i]
-        if all(self.all_dones):
-            infos['desc'] = self.behavior_desc
-            infos['ep_lengths'] = self.T
-        return obs, rews, self.all_dones, infos
+        infos['desc'] = self.behavior_desc
+        infos['ep_lengths'] = self.T
+        return obs, rews, dones, infos
 
     def reset(self):
         obs = super().reset()
@@ -349,7 +343,7 @@ class QDAnt(Ant):
 
     def get_behavior_descriptors(self, obs):
         '''
-        Behavior descriptors are average torso position (z - 1d) and average torso velocity (3d) = 4 dim vector
+        Behavior descriptors are average torso height (z - 1d) and average torso velocity (3d) = 4 dim vector
         '''
         return obs[:, 0:4]
 

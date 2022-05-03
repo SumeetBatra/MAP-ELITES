@@ -16,6 +16,7 @@ class VariationOperator(EventLoopObject):
                  elites_map,
                  eval_cache,
                  eval_in_queue,
+                 free_policy_keys,
                  event_loop,
                  object_id,
                  crossover_op='iso_dd',
@@ -37,6 +38,7 @@ class VariationOperator(EventLoopObject):
         self.elites_map = elites_map
         self.eval_cache = eval_cache
         self.eval_in_queue = eval_in_queue
+        self.free_policy_keys = free_policy_keys
         self.init_mode = True
         self.queued_for_eval = 0  # want to always keep some mutated policies queued so that the evaluator(s) are never waiting
 
@@ -85,77 +87,63 @@ class VariationOperator(EventLoopObject):
         self.queued_for_eval -= num_eval
         log.debug(f'Received {len(agents)} processed agents from {oid}, {self.queued_for_eval=}')
 
+    def on_release(self, mapped_actors_keys):
+        self.free_policy_keys.update(mapped_actors_keys)
+
     def maybe_mutate_new_batch(self):
         if self.queued_for_eval < 2 * self.cfg.num_agents:
-            self.init_map() if self.init_mode else self.evolve_batch()
+            init_mode = True if len(self.elites_map) <= self.cfg.random_init else False
+            self.evolve_batch(init_mode)
 
-    def init_map(self):
+
+    def evolve_batch(self, init=True):
         '''
-        Initialize the map of elites
+        Mutate a new batch of policies
+        :param init: whether the elites map still needs to be initialized with random policies or not
         '''
-        rand_init_batch_size = self.cfg.random_init_batch
-        log.debug('Initializing the map of elites')
-        if len(self.elites_map) <= self.cfg.random_init:
-            actor_x_ids = []
-            actor_y_ids = [None for _ in range(len(actor_x_ids))]
-            if self.mutation_op and not self.crossover_op:
-                actor_x_ids = np.random.choice(range(len(self.all_actors)), size=rand_init_batch_size, replace=False)
+        if init:  # initialize archive with random policies
+            log.debug('Initializing the map of elites with random policies')
+            batch_size = self.cfg.random_init_batch
+            keys = list(self.free_policy_keys)  # policy keys
+        else:  # get policies from the archive and mutate those
+            log.debug('Mutating policies from the map of elites')
+            batch_size = int(self.cfg['eval_batch_size'] * self.cfg['proportion_evo'])
+            keys = list(self.elites_map.keys())  # keys into the archive which contain policy keys
 
-            elif self.crossover_op:
-                actor_x_ids = np.random.choice(range(len(self.all_actors)), size=rand_init_batch_size, replace=False)
-                actor_y_ids = np.random.choice(range(len(self.all_actors)), size=rand_init_batch_size, replace=False)
-
-            actors_x_evo = self.all_actors[actor_x_ids][:, 0]
-            actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
-
-            device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
-            batch_actors_x = BatchMLP(actors_x_evo, device)
-            batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
-            with torch.no_grad():
-                actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
-
-            # place in eval cache for Evaluator to evaluate
-            cached_actors = self.eval_cache[actor_x_ids]
-            for p_cache, pz in zip(cached_actors, actors_z):
-                p_cache.load_state_dict(pz.state_dict())
-            self.queued_for_eval += len(actor_x_ids)
-            actor_x_ids = np.split(actor_x_ids, self.cfg.num_evaluators)
-            self.eval_in_queue.put_many(actor_x_ids)
-            self.to_evaluate.emit(self.object_id, self.init_mode)
-        else:
-            log.debug('Finished elites map initialization!')
-            self.init_mode = False
-            self.evolve_batch()
-
-
-    def flush(self, q):
-        '''
-        Flush the remaining contents of a q
-        :param q: any standard Queue() object
-        '''
-        while not q.empty():
-            q.get_many()
-
-    def evolve_batch(self):
-        '''
-        Get new batch of agents to evolve
-        '''
-        batch_size = int(self.cfg['eval_batch_size'] * self.cfg['proportion_evo'])
-        # log.debug(f'Evolving a new batch of {batch_size} policies')
-        keys = list(self.elites_map.keys())
         actor_x_ids = []
         actor_y_ids = [None for _ in range(len(actor_x_ids))]
+
         if self.mutation_op and not self.crossover_op:
-            actor_x_inds = np.random.choice(range(len(keys)), size=batch_size, replace=False)
-            for i in range(len(actor_x_inds)):
-                actor_x_ids += self.elites_map[keys[actor_x_inds[i]]]
+            if init:
+                actor_x_ids = np.random.choice(keys, size=batch_size, replace=False)
+                actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
+
+            else:
+                actor_x_inds = np.random.choice(list(range(len(keys))), size=batch_size, replace=False)
+                actor_x_inds = np.repeat(actor_x_inds, repeats=self.cfg.mutations_per_policy)
+                for x_ind in actor_x_inds:
+                    actor_x_ids += self.elites_map[keys[x_ind]][0]  # this holds the actual policy key b/c policy key can be different from the archive key
 
         elif self.crossover_op:
-            actor_x_inds = np.random.choice(range(len(keys)), size=batch_size, replace=False)
-            actor_y_inds = np.random.choice(range(len(keys)), size=batch_size, replace=False)
-            for i in range(len(actor_x_inds)):
-                actor_x_ids.append(self.elites_map[keys[actor_x_inds[i]]][0])
-                actor_y_ids.append(self.elites_map[keys[actor_y_inds[i]]][0])
+            if init:
+                actor_x_ids = np.random.choice(keys, size=batch_size, replace=False)
+                actor_y_ids = np.random.choice(keys, size=batch_size, replace=False)
+                actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
+                actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
+
+            else:
+                actor_x_inds = np.random.choice(list(range(len(keys))), size=batch_size, replace=False)
+                actor_y_inds = np.random.choice(list(range(len(keys))), size=batch_size, replace=False)
+                actor_x_inds = np.repeat(actor_x_inds, repeats=self.cfg.mutations_per_policy)
+                actor_y_inds = np.repeat(actor_y_inds, repeats=self.cfg.mutations_per_policy)
+                for x_ind, y_ind in zip(actor_x_inds, actor_y_inds):
+                    actor_x_ids.append(self.elites_map[keys[x_ind]][0])
+                    actor_y_ids.append(self.elites_map[keys[y_ind]][0])
+
+        # put back the policy keys we don't use
+        self.free_policy_keys -= set(actor_x_ids)
+        if actor_y_ids is not None:
+            self.free_policy_keys -= set(actor_y_ids)
 
         actors_x_evo = self.all_actors[actor_x_ids][:, 0]
         actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
@@ -167,13 +155,24 @@ class VariationOperator(EventLoopObject):
             actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
 
         # place in eval cache for Evaluator to evaluate
-        cached_actors = self.eval_cache[actor_x_ids]
+        unique_actor_x_ids = list(set(actor_x_ids))
+        cached_actors = self.eval_cache[unique_actor_x_ids]  # get unique locations in eval_cache
+        actors_z = actors_z.reshape(-1, self.cfg.mutations_per_policy)  # b/c we repeated each policy key M times
         for p_cache, pz in zip(cached_actors, actors_z):
+            pz = BatchMLP(pz, device)
             p_cache.load_state_dict(pz.state_dict())
         self.queued_for_eval += len(actor_x_ids)
-        actor_x_ids = np.split(np.array(actor_x_ids), self.cfg.num_evaluators)
-        self.eval_in_queue.put_many(actor_x_ids)
+        self.eval_in_queue.put(unique_actor_x_ids)
         self.to_evaluate.emit(self.object_id, self.init_mode)
+
+    def flush(self, q):
+        '''
+        Flush the remaining contents of a q
+        :param q: any standard Queue() object
+        '''
+        while not q.empty():
+            q.get_many()
+
 
 
     def evo(self, actor_x, actor_y, device, crossover_op=None, mutation_op=None):

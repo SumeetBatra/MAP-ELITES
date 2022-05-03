@@ -62,6 +62,7 @@ def parse_args(argv=None):
     parser.add_argument("--max_uniform", default=0.1, type=float, help='Max mutation for uniform muatation (Not used in GECCO paper)')
     parser.add_argument('--eval_batch_size', default=100, type=int, help='Batch size for parallel evaluation of policies')
     parser.add_argument('--proportion_evo', default=0.5, type=float, help='Proportion of batch to use in GA variation (crossovers/mutations)')
+    parser.add_argument('--mutations_per_policy', default=10, type=int, help='Number of times to mutate a single policy (policy is stored as a batch of mutated policies)')
 
     # args for isaac gym
     parser.add_argument('--num_agents', default=10, type=int, help='Number of parallel envs in vectorized env')

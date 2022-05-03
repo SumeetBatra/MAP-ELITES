@@ -19,6 +19,7 @@ from models.bipedal_walker_model import bpwalker_model_factory
 from faster_fifo import Queue
 from map_elites.variation import VariationOperator
 from map_elites.evaluator import Evaluator, UNUSED, MAPPED
+from vectorized import BatchMLP
 from torch.multiprocessing import Process as TorchProcess, Pipe
 
 from map_elites import common as cm
@@ -58,7 +59,12 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
     all_actors = np.array([(ant_model_factory(device, hidden_size=128), UNUSED) for _ in range(n_niches)])
     # variation workers will put actors that need to be evaluated in here
-    eval_cache = np.array([copy.deepcopy(model) for model, _ in all_actors])
+    eval_cache = []
+    for _ in range(n_niches):
+        # eval cache will store M-batches of mlps since variation worker mutates M times per policy
+        mlps = np.array([ant_model_factory(device, hidden_size=128) for _ in range(cfg.mutations_per_policy)])
+        eval_cache.append(BatchMLP(mlps, device).share_memory())
+    eval_cache = np.array(eval_cache)
 
     # keep track of Individuals()
     agent_archive = []
@@ -71,10 +77,15 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     # create the map of elites
     elites_map = manager.dict()
 
-    runner = Runner(cfg, agent_archive, elites_map, eval_cache, all_actors, kdt, actors_file, filename)
+    # shared queues to keep track of which policies are free to mutate/being evaluated/being mapped to archive
+    free_queue, eval_in_queue, map_queue = Queue(), Queue(), Queue()
+    free_policy_keys = set(list(range(n_niches)))
+    # init the free queue with keys for all policies
+    for i in range(len(all_actors)):
+        free_queue.put(i)
 
-    # one eval queue shared b/w Variation worker and all eval workers
-    eval_in_queue = Queue()
+    runner = Runner(cfg, agent_archive, elites_map, eval_cache, map_queue, all_actors, kdt, actors_file, filename)
+
 
     # do variation and evaluation in a subprocess
     var_loop = EventLoopProcess('var_loop')
@@ -83,6 +94,7 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
                                      elites_map,
                                      eval_cache,
                                      eval_in_queue,
+                                     free_policy_keys,
                                      event_loop=var_loop.event_loop,
                                      object_id='variation worker',
                                      crossover_op=cfg.crossover_op,

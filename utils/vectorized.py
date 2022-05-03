@@ -5,8 +5,7 @@ import pickle
 import numpy as np
 
 from torch import Tensor
-
-
+from models.policy import Policy
 
 
 class BatchLinearBlock(nn.Module):
@@ -30,7 +29,7 @@ class BatchLinearBlock(nn.Module):
         return y
 
 
-class BatchMLP(nn.Module):
+class BatchMLP(Policy):
     def __init__(self, mlps, device):
         super().__init__()
         self.mlps = mlps
@@ -86,8 +85,8 @@ class BatchMLP(nn.Module):
             for j in range(len(self.mlps)):
                 if not isinstance(self.mlps[j].layers[i], nn.Linear):
                     continue
-                self.mlps[j].layers[i].weight.data = layer.weight[i]
-                self.mlps[j].layers[i].bias.data = layer.bias[i]
+                self.mlps[j].layers[i].weight.data = layer.weight[j]
+                self.mlps[j].layers[i].bias.data = layer.bias[j]
         return self.mlps
 
     def to_device(self, device):

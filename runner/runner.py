@@ -14,10 +14,12 @@ from map_elites import common as cm
 from map_elites.evaluator import Evaluator, UNUSED, MAPPED
 from map_elites.variation import VariationOperator
 from typing import List
+from vectorized import BatchMLP
+from typing import List
 
 
 class Runner(EventLoopObject):
-    def __init__(self, cfg, archive, elites_map, eval_cache, all_actors, kdt, actors_file, filename, unique_name='runner loop'):
+    def __init__(self, cfg, archive, elites_map, eval_cache, map_queue, all_actors, kdt, actors_file, filename, unique_name='runner loop'):
         '''
         This is the main loop that starts other event loops and processes file i/o, logging, etc
         '''
@@ -31,6 +33,7 @@ class Runner(EventLoopObject):
         self.archive = archive
         self.elites_map = elites_map
         self.eval_cache = eval_cache
+        self.map_queue = map_queue
         self.all_actors = all_actors
         self.kdt = kdt
         self.checkpoints_dir = self.cfg.checkpoint_dir
@@ -61,6 +64,9 @@ class Runner(EventLoopObject):
 
     @signal
     def stop(self): pass
+
+    @signal
+    def release_keys(self): pass  # release keys to policies that have finished being mapped so that the var worker can use them again
 
     @property
     def report_interval(self):
@@ -108,7 +114,8 @@ class Runner(EventLoopObject):
                 "median fitness": np.median(fit_list),
                 "5th percentile": np.percentile(fit_list, 5),
                 "95th percentile": np.percentile(fit_list, 95),
-                "env steps": self.total_env_steps
+                "env steps": self.total_env_steps,
+                "archive_size": len(self.elites_map)
             })
 
     def save_checkpoint(self):
@@ -145,10 +152,15 @@ class Runner(EventLoopObject):
         start_time = time.time()
         metadata = []
         evals = len(agents)
-        policies = self.eval_cache[evaluated_actors_keys]
+        batch_policies: List[BatchMLP] = self.eval_cache[evaluated_actors_keys]
+
+        # need to decompose BatchMLPs into a list of mlps
+        policies = []
+        for batch_policy in batch_policies:
+            policies += batch_policy.update_mlps().tolist()
+
         for policy, agent in zip(policies, agents):
             added = False
-
             niche_index = self.kdt.query([agent.phenotype], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
             niche = self.kdt.data[niche_index]
             n = cm.make_hashable(niche)
@@ -183,7 +195,7 @@ class Runner(EventLoopObject):
                 metadata.append(agent)
         runtime = time.time() - start_time
         log.debug(f'Finished mapping elite agents in {runtime:.1f} seconds')
-
+        self.release_keys.emit(evaluated_actors_keys)
         return metadata, evals
 
     def _save_archive(self, archive, all_actors, gen, archive_name, save_path, save_models=False):
@@ -270,10 +282,13 @@ class Runner(EventLoopObject):
         # self.evaluator.init_elites_map.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
         # self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
 
+        # when runner finishes mapping policies to the archive, hand them back to the var worker
+        self.release_keys.connect(self.variation_op.on_release)
+
         for evaluator in self.evaluators:
             # start the evaluators
             self.event_loop.start.connect(evaluator.init_env)
-            evaluator.init_elites_map.connect(self.variation_op.init_map)
+            evaluator.init_elites_map.connect(self.variation_op.evolve_batch)
             self.variation_op.to_evaluate.connect(evaluator.on_evaluate)
 
             # auxiliary connections for logging

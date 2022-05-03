@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import copy
+from models.policy import Policy
 
 def ant_model_factory(device, hidden_size=256, init_type='xavier_uniform'):
     model = AntNN(hidden_size=hidden_size, init_type=init_type)
@@ -9,7 +10,7 @@ def ant_model_factory(device, hidden_size=256, init_type='xavier_uniform'):
     return model
 
 
-class AntNN(nn.Module):
+class AntNN(Policy):
     def __init__(self, input_dim=60, hidden_size=256, action_dim=8, init_type='xavier_uniform'):
         super().__init__()
         assert init_type in ['xavier_uniform', 'kaiming_uniform', 'orthogonal'], 'The provided initialization type is not supported'
