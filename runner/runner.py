@@ -14,7 +14,7 @@ from map_elites import common as cm
 from map_elites.evaluator import Evaluator, UNUSED, MAPPED
 from map_elites.variation import VariationOperator
 from typing import List
-from vectorized import BatchMLP
+from utils.vectorized import BatchMLP
 from typing import List
 
 
