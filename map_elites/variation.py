@@ -109,7 +109,7 @@ class VariationOperator(EventLoopObject):
             batch_size = int(self.cfg['eval_batch_size'] * self.cfg['proportion_evo'])
             keys = [x[0] for x in self.elites_map.values()]
 
-        free_keys = self.free_policy_keys & set(keys)
+        free_keys = list(self.free_policy_keys & set(keys))
         if len(free_keys) < batch_size:
             log.warn(f'Warning: not enough free policies available to mutate, {len(free_keys)=}, {batch_size=}. '
                      f'Variation worker will skip this iteration of mutations. Consider increasing the initial size of '
@@ -138,15 +138,16 @@ class VariationOperator(EventLoopObject):
         batch_actors_x = BatchMLP(actors_x_evo, device)
         batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
         with torch.no_grad():
-            actors_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
+            actor_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
+            actors_z = actor_z.update_mlps(copy.deepcopy(actors_x_evo))
 
         # place in eval cache for Evaluator to evaluate
         unique_actor_x_ids = list(set(actor_x_ids))
         cached_actors = self.eval_cache[unique_actor_x_ids]  # get unique locations in eval_cache
         actors_z = actors_z.reshape(-1, self.cfg.mutations_per_policy)  # b/c we repeated each policy key M times
-        for p_cache, pz in zip(cached_actors, actors_z):
-            pz = BatchMLP(pz, device)
-            p_cache.load_state_dict(pz.state_dict())
+        for p_cache, pz in zip(cached_actors, actors_z):  # p_cache and pz are lists of mlps
+            for cached_policy, mutated_policy in zip(p_cache, pz):
+                cached_policy.load_state_dict(mutated_policy.state_dict())
         self.queued_for_eval += len(actor_x_ids)
         self.eval_in_queue.put(unique_actor_x_ids)
         self.to_evaluate.emit(self.object_id, self.init_mode)
@@ -174,21 +175,21 @@ class VariationOperator(EventLoopObject):
         if crossover_op:
             actor_x_ids = actor_x.get_mlp_ids()
             actor_y_ids = actor_y.get_mlp_ids()
-            actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
-            actor_z.set_parent_id(which_parent=2, ids=actor_y_ids)
+            # TODO: figure out another way to keep track of evolutionary history
+            # actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
+            # actor_z.set_parent_id(which_parent=2, ids=actor_y_ids)
             actor_z_state_dict = self.batch_crossover(actor_x.state_dict(), actor_y.state_dict(), crossover_op, device=device)
             if mutation_op:
                 actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
         elif mutation_op:
             actor_x_ids = actor_x.get_mlp_ids()
-            actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
+            # actor_z.set_parent_id(which_parent=1, ids=actor_x_ids)
             actor_z_state_dict = self.batch_mutation(actor_z_state_dict, mutation_op)
 
         actor_z.load_state_dict(actor_z_state_dict)
-        res = actor_z.update_mlps()
         runtime = time.time() - start_time
         log.debug(f'Mutated {len(actor_x)} actors in {runtime:.1f} seconds')
-        return res
+        return actor_z
 
     def batch_crossover(self, batch_x_state_dict, batch_y_state_dict, crossover_op, device):
         """

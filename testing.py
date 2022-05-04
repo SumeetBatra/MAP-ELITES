@@ -15,6 +15,7 @@ from collections import deque
 from utils.vectorized import BatchMLP
 from attrdict import AttrDict
 from envs.isaacgym.make_env import make_gym_env
+import copy
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -45,7 +46,8 @@ def job2(a, t=None):
     s.p1 += 1
 
 def job3(arr, idx):
-    arr[idx] = 1
+    arr = copy.deepcopy(arr)
+    arr[idx][idx][idx] = 1
 
 
 class Species(AntNN):
@@ -82,64 +84,67 @@ if __name__ == '__main__':
     #     print(f'Running policy {int(policy_id)}')
     #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
     #     enjoy(policy_path, render=True)
-    # t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
-    # s = Species().share_memory()
-    # a = [s]
-    # print('Before: ', a[0].summary())
-    # p1 = Process(target=job1, args=(a, t))
-    # p2 = Process(target=job2, args=(a, t))
-    # p1.start()
-    # p2.start()
-    # p1.join()
-    # p2.join()
-    # print('After: ', a[0].summary())
-    # print(t)
+    t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
+    s = Species().share_memory()
+    a = [s]
+    print('Before: ', a[0].summary())
+    p1 = Process(target=job1, args=(a, t))
+    p2 = Process(target=job2, args=(a, t))
+    p1.start()
+    p2.start()
+    p1.join()
+    p2.join()
+    print('After: ', a[0].summary())
+    print(t)
+
+    arr = [[torch.tensor([0, 0, 0, 0, 0]).to(torch.device('cpu')).share_memory_() for _ in range(3)] for _ in range(5)]
+    p3 = Process(target=job3, args=(arr, 0))
+    p4 = Process(target=job3, args=(arr, 2))
+    p3.start()
+    p4.start()
+    p3.join()
+    p4.join()
+    print(arr)
+
+
+
+    # num_agents = 1000
+    # cfg = AttrDict({'headless': True, 'num_agents': num_agents})
+    # vec_env = make_gym_env(cfg)
+    # mlps = []
+    # device = torch.device('cuda:0')
+    # for _ in range(num_agents):
+    #     mlps.append(ant_model_factory(device))
+    # create_start = time.time()
+    # batch_mlp = BatchMLP(np.array(mlps), device)
+    # create_time = time.time() - create_start
+    # print(f'Took {create_time:.2f} seconds to make a batch mlp of {num_agents} agents')
+    # single_mlp = ant_model_factory(device)
     #
-    # arr = torch.tensor([0, 0, 0, 0, 0])
-    # p3 = Process(target=job3, args=(arr, 0))
-    # p4 = Process(target=job3, args=(arr, 2))
-    # p3.start()
-    # p4.start()
-    # p3.join()
-    # p4.join()
-    # print(arr)
-    num_agents = 1000
-    cfg = AttrDict({'headless': True, 'num_agents': num_agents})
-    vec_env = make_gym_env(cfg)
-    mlps = []
-    device = torch.device('cuda:0')
-    for _ in range(num_agents):
-        mlps.append(ant_model_factory(device))
-    create_start = time.time()
-    batch_mlp = BatchMLP(np.array(mlps), device)
-    create_time = time.time() - create_start
-    print(f'Took {create_time:.2f} seconds to make a batch mlp of {num_agents} agents')
-    single_mlp = ant_model_factory(device)
-
-    data = torch.randn((num_agents, 60)).to(device)
-    batch_start = time.time()
-    for _ in range(1000):
-        acts = batch_mlp(data)
-        vec_env.step(acts)
-    batch_time = time.time() - batch_start
-
-    single_start = time.time()
-    for _ in range(1000):
-        acts = single_mlp(data)
-        vec_env.step(acts)
-    single_time = time.time() - single_start
-
-    print(f'Batch MLP took {batch_time:.2f} seconds, Single MLP took {single_time:.2f} seconds')
-
-    backup_ids, backup_mlps = list(range(1000)), [ant_model_factory(device) for _ in range(1000)]
-    for j in range(len(backup_mlps)):
-        for i in range(len(backup_mlps[j].layers)):
-            if not isinstance(backup_mlps[j].layers[i], torch.nn.Linear):
-                continue
-            backup_mlps[j].layers[i].weight = torch.nn.Parameter(torch.zeros_like(backup_mlps[j].layers[i].weight))
-
-    replace_start = time.time()
-    batch_mlp.replace_mlps(backup_ids, backup_mlps)
-    replace_time = time.time() - replace_start
-
-    print(f'Took {replace_time} seconds to replace {len(backup_mlps)} MLPs')
+    # data = torch.randn((num_agents, 60)).to(device)
+    # batch_start = time.time()
+    # for _ in range(1000):
+    #     acts = batch_mlp(data)
+    #     vec_env.step(acts)
+    # batch_time = time.time() - batch_start
+    #
+    # single_start = time.time()
+    # for _ in range(1000):
+    #     acts = single_mlp(data)
+    #     vec_env.step(acts)
+    # single_time = time.time() - single_start
+    #
+    # print(f'Batch MLP took {batch_time:.2f} seconds, Single MLP took {single_time:.2f} seconds')
+    #
+    # backup_ids, backup_mlps = list(range(1000)), [ant_model_factory(device) for _ in range(1000)]
+    # for j in range(len(backup_mlps)):
+    #     for i in range(len(backup_mlps[j].layers)):
+    #         if not isinstance(backup_mlps[j].layers[i], torch.nn.Linear):
+    #             continue
+    #         backup_mlps[j].layers[i].weight = torch.nn.Parameter(torch.zeros_like(backup_mlps[j].layers[i].weight))
+    #
+    # replace_start = time.time()
+    # batch_mlp.replace_mlps(backup_ids, backup_mlps)
+    # replace_time = time.time() - replace_start
+    #
+    # print(f'Took {replace_time} seconds to replace {len(backup_mlps)} MLPs')

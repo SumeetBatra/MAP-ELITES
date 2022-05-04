@@ -3,10 +3,12 @@ import torch.nn as nn
 import copy
 from models.policy import Policy
 
-def ant_model_factory(device, hidden_size=256, init_type='xavier_uniform'):
+
+def ant_model_factory(device, hidden_size=256, init_type='xavier_uniform', share_memory=True):
     model = AntNN(hidden_size=hidden_size, init_type=init_type)
     model.apply(model.init_weights)
-    model = model.to(device).share_memory()
+    if share_memory:
+        model = model.to(device).share_memory()
     return model
 
 

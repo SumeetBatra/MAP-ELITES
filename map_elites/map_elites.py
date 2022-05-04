@@ -57,13 +57,13 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     device = torch.device("cpu")  # batches of agents will be put on the least busiest gpu if cuda available during evolution/evaluation
     # initialize all actors
     # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
-    all_actors = np.array([(ant_model_factory(device, hidden_size=128), UNUSED) for _ in range(n_niches)])
+    all_actors = np.array([(ant_model_factory(device, hidden_size=cfg.hidden_size), UNUSED) for _ in range(n_niches)])
     # variation workers will put actors that need to be evaluated in here
     eval_cache = []
     for _ in range(n_niches):
         # eval cache will store M-batches of mlps since variation worker mutates M times per policy
-        mlps = np.array([ant_model_factory(device, hidden_size=128) for _ in range(cfg.mutations_per_policy)])
-        eval_cache.append(BatchMLP(mlps, device).share_memory())
+        mlps = [ant_model_factory(device, hidden_size=cfg.hidden_size) for _ in range(cfg.mutations_per_policy)]
+        eval_cache.append(mlps)
     eval_cache = np.array(eval_cache)
 
     # keep track of Individuals()

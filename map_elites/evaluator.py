@@ -112,8 +112,8 @@ class Evaluator(EventLoopObject):
         batch_actors = self.eval_cache[mutated_actor_keys]
         # convert BatchMLPs to list of mlps
         actors = np.array([])
-        for batch_actor in batch_actors:
-            actors = np.concatenate((actors, batch_actor.update_mlps()), axis=0)
+        for actors_list in batch_actors:
+            actors = np.concatenate((actors, actors_list))
         device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)

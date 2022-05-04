@@ -15,7 +15,9 @@ from map_elites.evaluator import Evaluator, UNUSED, MAPPED
 from map_elites.variation import VariationOperator
 from typing import List
 from utils.vectorized import BatchMLP
+from models.policy import Policy
 from typing import List
+from numpy import ndarray
 
 
 class Runner(EventLoopObject):
@@ -152,12 +154,7 @@ class Runner(EventLoopObject):
         start_time = time.time()
         metadata = []
         evals = len(agents)
-        batch_policies: List[BatchMLP] = self.eval_cache[evaluated_actors_keys]
-
-        # need to decompose BatchMLPs into a list of mlps
-        policies = []
-        for batch_policy in batch_policies:
-            policies += batch_policy.update_mlps().tolist()
+        policies: ndarray[Policy] = self.eval_cache[evaluated_actors_keys].reshape(-1)
 
         for policy, agent in zip(policies, agents):
             added = False

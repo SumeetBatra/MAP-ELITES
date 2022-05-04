@@ -32,11 +32,11 @@ class BatchLinearBlock(nn.Module):
 class BatchMLP(Policy):
     def __init__(self, mlps, device):
         super().__init__()
-        self.mlps = mlps
-        assert isinstance(self.mlps, np.ndarray), 'mlps should be passed as a numpy ndarray'
+        assert isinstance(mlps, np.ndarray), 'mlps should be passed as a numpy ndarray'
         self.num_mlps = len(mlps)
+        self.mlp_ids = [mlp.id for mlp in mlps]
         self.device = device
-        self.blocks = self._slice_mlps()
+        self.blocks = self._slice_mlps(mlps)
         self.layers = nn.Sequential(*self.blocks)
 
     def forward(self, x):
@@ -51,43 +51,58 @@ class BatchMLP(Policy):
                 mlp.parent_2_id = id
 
     def get_mlp_ids(self):
-        ids = [mlp.id for mlp in self.mlps]
-        return ids
+        return self.mlp_ids
 
-    def replace_mlps(self, ids, mlps):
-        self.mlps[ids] = mlps
-        for name, weight in self.named_parameters():
-            weight.data[ids] = torch.stack([mlp.state_dict()[name] for mlp in mlps]).to(self.device)
+    # def replace_mlps(self, ids, mlps):
+    #     self.mlps[ids] = mlps
+    #     for name, weight in self.named_parameters():
+    #         weight.data[ids] = torch.stack([mlp.state_dict()[name] for mlp in mlps]).to(self.device)
 
-    def _slice_mlps(self):
-        num_layers = len(self.mlps[0].layers)
+    def _slice_mlps(self, mlps):
+        num_layers = len(mlps[0].layers)
         blocks = []
         # slice_weights = torch.tensor([self.mlps[i].layers[j] for j in range(num_layers) for i in range(len(self.mlps)) if isinstance(self.mlps[i].layers[j], nn.Linear)])
         for i in range(0, num_layers):
-            if not isinstance(self.mlps[0].layers[i], nn.Linear):
+            if not isinstance(mlps[0].layers[i], nn.Linear):
                 continue
-            slice_weights = [self.mlps[j].layers[i].weight.to(self.device) for j in range(self.num_mlps)]
-            slice_bias = [self.mlps[j].layers[i].bias.to(self.device) for j in range(self.num_mlps)]
+            slice_weights = [mlps[j].layers[i].weight.to(self.device) for j in range(self.num_mlps)]
+            slice_bias = [mlps[j].layers[i].bias.to(self.device) for j in range(self.num_mlps)]
             slice_weights = torch.stack(slice_weights)
             slice_bias = torch.stack(slice_bias)
-            nonlinear = self.mlps[0].layers[i+1] if i+1 < num_layers else None
+            nonlinear = mlps[0].layers[i+1] if i+1 < num_layers else None
             block = BatchLinearBlock(slice_weights, slice_bias)
             blocks.append(block)
             blocks.append(nonlinear)
         return blocks
 
-    def update_mlps(self):
+    # def update_mlps(self):
+    #     '''
+    #     The batch mlp blocks may have been updated from backprop or mutation/crossover.
+    #     This method updates the weights of the original mlps that produced the batch blocks
+    #     '''
+    #     for i, layer in enumerate(self.layers):
+    #         for j in range(len(self.mlps)):
+    #             if not isinstance(self.mlps[j].layers[i], nn.Linear):
+    #                 continue
+    #             self.mlps[j].layers[i].weight.data = layer.weight[j]
+    #             self.mlps[j].layers[i].bias.data = layer.bias[j]
+    #     return self.mlps
+
+    def update_mlps(self, mlps):
         '''
-        The batch mlp blocks may have been updated from backprop or mutation/crossover.
-        This method updates the weights of the original mlps that produced the batch blocks
+        Update the list of mlps with the whatever parameters are stored in the BatchMLP object
+        The mlps that produced this object and the mlps argument must be the same size/architecture
+        :param mlps: list of mlps to update
+        :return: list of mlps with the new parameters
         '''
         for i, layer in enumerate(self.layers):
-            for j in range(len(self.mlps)):
-                if not isinstance(self.mlps[j].layers[i], nn.Linear):
+            for j in range(len(mlps)):
+                if not isinstance(mlps[j].layers[i], nn.Linear):
                     continue
-                self.mlps[j].layers[i].weight.data = layer.weight[j]
-                self.mlps[j].layers[i].bias.data = layer.bias[j]
-        return self.mlps
+                mlps[j].layers[i].weight.data = layer.weight[j]
+                mlps[j].layers[i].bias.data = layer.bias[j]
+        return mlps
+
 
     def to_device(self, device):
         self.to(device)
