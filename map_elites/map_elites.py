@@ -19,7 +19,7 @@ from models.bipedal_walker_model import bpwalker_model_factory
 from faster_fifo import Queue
 from map_elites.variation import VariationOperator
 from map_elites.evaluator import Evaluator, UNUSED, MAPPED
-from vectorized import BatchMLP
+from utils.vectorized import BatchMLP
 from torch.multiprocessing import Process as TorchProcess, Pipe
 
 from map_elites import common as cm
