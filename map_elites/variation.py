@@ -95,7 +95,6 @@ class VariationOperator(EventLoopObject):
             init_mode = True if len(self.elites_map) <= self.cfg.random_init else False
             self.evolve_batch(init_mode)
 
-
     def evolve_batch(self, init=True):
         '''
         Mutate a new batch of policies
@@ -108,42 +107,29 @@ class VariationOperator(EventLoopObject):
         else:  # get policies from the archive and mutate those
             log.debug('Mutating policies from the map of elites')
             batch_size = int(self.cfg['eval_batch_size'] * self.cfg['proportion_evo'])
-            keys = list(self.elites_map.keys())  # keys into the archive which contain policy keys
+            keys = [x[0] for x in self.elites_map.values()]
 
+        free_keys = self.free_policy_keys & set(keys)
+        if len(free_keys) < batch_size:
+            log.warn(f'Warning: not enough free policies available to mutate, {len(free_keys)=}, {batch_size=}. '
+                     f'Variation worker will skip this iteration of mutations. Consider increasing the initial size of '
+                     f'the elites map.')
+            return
         actor_x_ids = []
         actor_y_ids = [None for _ in range(len(actor_x_ids))]
 
         if self.mutation_op and not self.crossover_op:
-            if init:
-                actor_x_ids = np.random.choice(keys, size=batch_size, replace=False)
-                actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
-
-            else:
-                actor_x_inds = np.random.choice(list(range(len(keys))), size=batch_size, replace=False)
-                actor_x_inds = np.repeat(actor_x_inds, repeats=self.cfg.mutations_per_policy)
-                for x_ind in actor_x_inds:
-                    actor_x_ids += self.elites_map[keys[x_ind]][0]  # this holds the actual policy key b/c policy key can be different from the archive key
+            actor_x_ids = np.random.choice(free_keys, size=batch_size, replace=False)
+            actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
 
         elif self.crossover_op:
-            if init:
-                actor_x_ids = np.random.choice(keys, size=batch_size, replace=False)
-                actor_y_ids = np.random.choice(keys, size=batch_size, replace=False)
-                actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
-                actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
+            actor_x_ids = np.random.choice(keys, size=batch_size, replace=False)
+            actor_y_ids = np.random.choice(keys, size=batch_size, replace=False)
+            actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
+            actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
 
-            else:
-                actor_x_inds = np.random.choice(list(range(len(keys))), size=batch_size, replace=False)
-                actor_y_inds = np.random.choice(list(range(len(keys))), size=batch_size, replace=False)
-                actor_x_inds = np.repeat(actor_x_inds, repeats=self.cfg.mutations_per_policy)
-                actor_y_inds = np.repeat(actor_y_inds, repeats=self.cfg.mutations_per_policy)
-                for x_ind, y_ind in zip(actor_x_inds, actor_y_inds):
-                    actor_x_ids.append(self.elites_map[keys[x_ind]][0])
-                    actor_y_ids.append(self.elites_map[keys[y_ind]][0])
-
-        # put back the policy keys we don't use
+        # remove the keys we will use from the set of all available policy keys
         self.free_policy_keys -= set(actor_x_ids)
-        if actor_y_ids is not None:
-            self.free_policy_keys -= set(actor_y_ids)
 
         actors_x_evo = self.all_actors[actor_x_ids][:, 0]
         actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
