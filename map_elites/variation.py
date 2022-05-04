@@ -123,8 +123,8 @@ class VariationOperator(EventLoopObject):
             actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
 
         elif self.crossover_op:
-            actor_x_ids = np.random.choice(keys, size=batch_size, replace=False)
-            actor_y_ids = np.random.choice(keys, size=batch_size, replace=False)
+            actor_x_ids = np.random.choice(free_keys, size=batch_size, replace=False)
+            actor_y_ids = np.random.choice(free_keys, size=batch_size, replace=False)
             actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
             actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
 
