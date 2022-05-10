@@ -292,13 +292,14 @@ class Runner(EventLoopObject):
             evaluator.eval_results.connect(self.on_eval_results)
             evaluator.eval_results.connect(self.variation_op.on_eval_results)
 
+            # allow for dynamic resizing of num_envs during runtime
+            self.variation_op.resize_vec_env.connect(evaluator.resize_env)
+            # early release keys if mismatch b/w vec-env size and # of mutated agents received
+            evaluator.release_keys.connect(self.variation_op.on_release)
+
             # stop the evaluators
             self.variation_op.stop.connect(evaluator.on_stop)
             evaluator.stop.connect(self._on_component_stopped)
-
-        # auxiliary connections for logging
-        # self.evaluator.eval_results.connect(self.on_eval_results)
-        # self.evaluator.eval_results.connect(self.variation_op.on_eval_results)
 
         # stop everything when training completes
         self.stop.connect(self.variation_op.on_stop)  # runner stops the variation worker

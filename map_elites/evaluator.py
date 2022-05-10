@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import time
+import gc
 
 from torch.multiprocessing import Value
 from itertools import count
@@ -96,12 +97,22 @@ class Evaluator(EventLoopObject):
     @signal
     def init_elites_map(self): pass
 
+    @signal
+    def release_keys(self): pass
+
     def init_env(self):
         self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
         self.high = torch.tensor(self.vec_env.env.action_space.high).to(self.sim_device)
         self.low = torch.tensor(self.vec_env.env.action_space.low).to(self.sim_device)
         self.action_space = self.vec_env.env.action_space
-        self.init_elites_map.emit()
+
+    def resize_env(self, num_envs):
+        self.cfg.num_agents = num_envs
+        self.vec_env.env.destroy()
+        del self.vec_env
+        gc.collect()
+        self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
+
 
     def on_evaluate(self, var_id, init_mode):
         '''
@@ -109,7 +120,7 @@ class Evaluator(EventLoopObject):
         :param var_id: Variation Worker that mutated the actors
         :param mutated_actor_keys: locations in the eval cache that hold the mutated policies
         '''
-        mutated_actor_keys = self.eval_in_queue.get()
+        mutated_actor_keys = self.eval_in_queue.get(block=True, timeout=1e6)
         self.evaluate_batch(mutated_actor_keys, init_mode)
 
     def evaluate_batch(self, mutated_actor_keys, init_mode=False):
@@ -122,6 +133,13 @@ class Evaluator(EventLoopObject):
         device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
+
+        # TODO: Hack?
+        if num_actors != self.vec_env.env.num_envs:
+            log.warn(f'Early return from Evaluator {self.object_id}\'s evaluate_batch() method because the '
+                     f'vec_env object was not resized in time for the new batch of mutated actors. Releasing keys...')
+            self.release_keys.emit(mutated_actor_keys)
+            return
 
         self.vec_env.seed(int((self.seed * 100) * self.eval_id))
         self.eval_id += 1
