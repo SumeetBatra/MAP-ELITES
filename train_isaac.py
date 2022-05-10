@@ -46,6 +46,8 @@ def parse_args(argv=None):
     # args for parallelization
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
     parser.add_argument('--num_evaluators', default=1, type=int, help='Number of evaluators for parallel policy evaluation. Best to set this to the number of gpus available on your system')
+    # TODO: Not implemented
+    parser.add_argument('--num_envs_per_policy', default=1, type=int, help='Number of agents that are parameterized by a single policy. Set to 1 if the policy is deterministic')
 
     # args for crossover and mutation of agent params
     parser.add_argument('--mutation_op', default=None, type=str, choices=['polynomial_mutation', 'gaussian_mutation', 'uniform_mutation'], help='Type of mutation to perform. Leave as None to do no mutations')
@@ -70,6 +72,8 @@ def parse_args(argv=None):
 
     # nn parameters
     parser.add_argument('--hidden_size', default=128, type=int, help='Hidden size of the mlp ')
+    parser.add_argument('--continuous_actions_sample', default=False, type=str2bool, help='Sample actions from a multivariate-gaussian using the raw logits from the actors. For RL agents in continuous action spaces only')
+
 
     args = parser.parse_args()
     return args

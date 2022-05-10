@@ -198,14 +198,14 @@ class VariationOperator(EventLoopObject):
         """
         batch_z_state_dict = copy.deepcopy(batch_x_state_dict)
         for tensor in batch_x_state_dict:
-            if 'weight' or 'bias' in tensor:
+            if 'weight' in tensor or 'bias' in tensor:
                 batch_z_state_dict[tensor] = crossover_op(batch_x_state_dict[tensor], batch_y_state_dict[tensor]).to(device)
         return batch_z_state_dict
 
     def batch_mutation(self, batch_x_state_dict, mutation_op):
         y = copy.deepcopy(batch_x_state_dict)
         for tensor in batch_x_state_dict:
-            if 'weight' or 'bias' in tensor:
+            if 'weight' in tensor or 'bias' in tensor:
                 y[tensor] = mutation_op(batch_x_state_dict[tensor])
         return y
 

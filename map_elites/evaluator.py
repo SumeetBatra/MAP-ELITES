@@ -67,6 +67,8 @@ class Evaluator(EventLoopObject):
         super().__init__(event_loop, object_id)
         self.cfg = cfg
         self.vec_env = None
+        self.high, self.low = None, None
+        self.action_space = None
         self.all_actors = all_actors
         self.eval_cache = eval_cache
         self.elites_map = elites_map
@@ -96,6 +98,9 @@ class Evaluator(EventLoopObject):
 
     def init_env(self):
         self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
+        self.high = torch.tensor(self.vec_env.env.action_space.high).to(self.sim_device)
+        self.low = torch.tensor(self.vec_env.env.action_space.low).to(self.sim_device)
+        self.action_space = self.vec_env.env.action_space
         self.init_elites_map.emit()
 
     def on_evaluate(self, var_id, init_mode):
@@ -128,7 +133,10 @@ class Evaluator(EventLoopObject):
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():
-                acts = batch_actors(obs)
+                logits = batch_actors(obs).view(-1)
+                acts = batch_actors.get_actions(self.action_space, logits, batch_actors.action_log_std.exp()).view(num_actors, -1) \
+                    if self.cfg.continuous_actions_sample else logits.view(num_actors, -1)
+                acts = torch.clip(acts, self.low, self.high)  # isaacgym action spaces are all [-1, 1]
                 obs, rew, dones, info = self.vec_env.step(acts)
                 rews += rew
                 ep_lengths = info['ep_lengths']
@@ -138,9 +146,6 @@ class Evaluator(EventLoopObject):
         runtime = time.time() - start_time
         log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
 
-        # if init_mode: # if init_map() is running, we don't need to do this
-        #     # queue up a new batch of agents to evolve while the evaluator finishes processing this batch
-        #     self.request_from_init_map.emit()
 
         ep_lengths = info['ep_lengths']
         avg_ep_length = torch.mean(ep_lengths)

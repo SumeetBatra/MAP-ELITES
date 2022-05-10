@@ -8,7 +8,7 @@ def ant_model_factory(device, hidden_size=256, init_type='xavier_uniform', share
     model = AntNN(hidden_size=hidden_size, init_type=init_type)
     model.apply(model.init_weights)
     if share_memory:
-        model = model.to(device).share_memory()
+        model.to(device).share_memory()
     return model
 
 
@@ -31,12 +31,22 @@ class AntNN(Policy):
             nn.Tanh(),
             nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
-            nn.Linear(hidden_size, action_dim),
+            nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
+            nn.Linear(hidden_size, action_dim)
         )
+        self._action_log_std = nn.Parameter(torch.zeros(action_dim,))
 
     def forward(self, obs):
         return self.layers(obs)
+
+    @property
+    def action_log_std(self):
+        return self._action_log_std
+
+    @action_log_std.setter
+    def action_log_std(self, log_stddev):
+        self._action_log_std = log_stddev
 
     # currently only support for linear layers
     def init_weights(self, m, init_type='xavier_uniform'):

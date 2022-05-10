@@ -38,9 +38,18 @@ class BatchMLP(Policy):
         self.device = device
         self.blocks = self._slice_mlps(mlps)
         self.layers = nn.Sequential(*self.blocks)
+        self._action_log_std = []
+
+        for mlp in mlps:
+            self._action_log_std.append(mlp.action_log_std.detach().clone())
+        self._action_log_std = nn.Parameter(torch.cat(self._action_log_std)).to(device)
 
     def forward(self, x):
         return self.layers(x)
+
+    @property
+    def action_log_std(self):
+        return self._action_log_std
 
     def set_parent_id(self, which_parent, ids):
         assert which_parent == 1 or which_parent == 2, 'invalid parent value. Can only have 2 parents (parent 1 or parent 2)'
@@ -72,7 +81,8 @@ class BatchMLP(Policy):
             nonlinear = mlps[0].layers[i+1] if i+1 < num_layers else None
             block = BatchLinearBlock(slice_weights, slice_bias)
             blocks.append(block)
-            blocks.append(nonlinear)
+            if nonlinear is not None:
+                blocks.append(nonlinear)
         return blocks
 
     # def update_mlps(self):
@@ -101,6 +111,10 @@ class BatchMLP(Policy):
                     continue
                 mlps[j].layers[i].weight.data = layer.weight[j]
                 mlps[j].layers[i].bias.data = layer.bias[j]
+        # update the stddev tensors
+        log_stddevs = self.action_log_std.view(len(mlps), -1)
+        for log_stddev, mlp in zip(log_stddevs, mlps):
+            mlp.action_log_std.data = log_stddev
         return mlps
 
 
