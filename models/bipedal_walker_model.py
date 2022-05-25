@@ -44,12 +44,6 @@ class BipedalWalkerNN(nn.Module):
         if isinstance(m, nn.Linear):
             self.init_func(m.weight)
 
-    def save(self, filename):
-        torch.save(self.state_dict(), filename)
-
-    def load(self, filename):
-        self.load_state_dict(torch.load(filename, map_location=torch.device('cpu')))
-
     def return_copy(self):
         return copy.deepcopy(self)
 

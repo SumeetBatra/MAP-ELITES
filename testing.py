@@ -16,6 +16,7 @@ from utils.vectorized import BatchMLP
 from attrdict import AttrDict
 from envs.isaacgym.make_env import make_gym_env
 import copy
+import psutil
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -84,27 +85,29 @@ if __name__ == '__main__':
     #     print(f'Running policy {int(policy_id)}')
     #     policy_path = f'checkpoints/checkpoint_002790022/policies/CVT-MAP-ELITES_BipedalWalkerV3_seed_0_dim_map_2_actor_{int(policy_id)}.pt'
     #     enjoy(policy_path, render=True)
-    t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
-    s = Species().share_memory()
-    a = [s]
-    print('Before: ', a[0].summary())
-    p1 = Process(target=job1, args=(a, t))
-    p2 = Process(target=job2, args=(a, t))
-    p1.start()
-    p2.start()
-    p1.join()
-    p2.join()
-    print('After: ', a[0].summary())
-    print(t)
 
-    arr = [[torch.tensor([0, 0, 0, 0, 0]).to(torch.device('cpu')).share_memory_() for _ in range(3)] for _ in range(5)]
-    p3 = Process(target=job3, args=(arr, 0))
-    p4 = Process(target=job3, args=(arr, 2))
-    p3.start()
-    p4.start()
-    p3.join()
-    p4.join()
-    print(arr)
+
+    # t = torch.tensor(1).to(torch.device('cpu')).share_memory_()
+    # s = Species().share_memory()
+    # a = [s]
+    # print('Before: ', a[0].summary())
+    # p1 = Process(target=job1, args=(a, t))
+    # p2 = Process(target=job2, args=(a, t))
+    # p1.start()
+    # p2.start()
+    # p1.join()
+    # p2.join()
+    # print('After: ', a[0].summary())
+    # print(t)
+    #
+    # arr = [[torch.tensor([0, 0, 0, 0, 0]).to(torch.device('cpu')).share_memory_() for _ in range(3)] for _ in range(5)]
+    # p3 = Process(target=job3, args=(arr, 0))
+    # p4 = Process(target=job3, args=(arr, 2))
+    # p3.start()
+    # p4.start()
+    # p3.join()
+    # p4.join()
+    # print(arr)
 
 
 
@@ -148,3 +151,21 @@ if __name__ == '__main__':
     # replace_time = time.time() - replace_start
     #
     # print(f'Took {replace_time} seconds to replace {len(backup_mlps)} MLPs')
+
+    n_niches = 1024
+    mutations_per_policy = 10
+    num_policies = int(n_niches * mutations_per_policy)
+
+    print(f'{num_policies=}')
+    torch.multiprocessing.set_sharing_strategy('file_system')
+    time.sleep(3)
+    device = torch.device('cpu')
+    mlps = []
+    for _ in range(num_policies):
+        mlp = ant_model_factory(device, 128, share_memory=True)
+        mlps.append(mlp)
+        torch.cuda.empty_cache()
+        print(f'Num mlps: {len(mlps)}')
+        print(f'RAM Memory % used: {psutil.virtual_memory()[2]}')
+
+    print(f'{len(mlps)=}')

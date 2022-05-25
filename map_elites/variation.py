@@ -41,7 +41,8 @@ class VariationOperator(EventLoopObject):
         self.free_policy_keys = free_policy_keys
         self.init_mode = True
         self.queued_for_eval = 0  # want to always keep some mutated policies queued so that the evaluator(s) are never waiting
-        self.num_envs = cfg.num_agents * cfg.mutations_per_policy
+        self.num_envs = cfg.num_agents
+        self.num_policies = cfg.random_init_batch
         self.step_size = 5  # number of new policies added to the archive before increasing the number of parallel environments
 
         # variation hyperparams
@@ -91,6 +92,7 @@ class VariationOperator(EventLoopObject):
     def on_eval_results(self, oid, agents, evaluated_actors_keys, frames, runtime, avg_ep_length):
         num_eval = len(agents)
         self.queued_for_eval -= num_eval
+        self.queued_for_eval = max(self.queued_for_eval, 0)
         log.debug(f'Received {len(agents)} processed agents from {oid}, {self.queued_for_eval=}')
 
     def on_release(self, mapped_actors_keys):
@@ -103,15 +105,17 @@ class VariationOperator(EventLoopObject):
             if not init_mode and self.init_mode:
                 log.debug(f'Finished initializing the map of elites. Resizing the number of gym envs...')
                 self.init_mode = False
-                self.num_envs = self.cfg.random_init
+                self.num_envs = self.cfg.random_init * self.cfg.mutations_per_policy * self.cfg.num_envs_per_policy
+                self.num_policies = self.cfg.random_init
                 self.resize_vec_env.emit(self.num_envs)
             self.evolve_batch(init_mode)
 
     def maybe_resize_vec_env(self):
-        if len(self.all_actors) >= len(self.elites_map) >= self.step_size + self.num_envs:
+        if len(self.all_actors) >= len(self.elites_map) >= self.step_size + self.num_policies:
             log.debug(f'Resizing the number of envs from {self.cfg.mutations_per_policy * self.num_envs} to '
-                      f'{self.cfg.mutations_per_policy * (self.step_size + self.num_envs)}')
-            self.num_envs += self.step_size
+                      f'{self.cfg.mutations_per_policy * (self.step_size * self.cfg.num_envs_per_policy * self.cfg.mutations_per_policy + self.num_envs)}')
+            self.num_envs += self.step_size * self.cfg.num_envs_per_policy * self.cfg.mutations_per_policy
+            self.num_policies += self.step_size
             self.resize_vec_env.emit(self.num_envs)
 
     def evolve_batch(self, init=True):
@@ -126,7 +130,7 @@ class VariationOperator(EventLoopObject):
         else:  # get policies from the archive and mutate those
             log.debug('Mutating policies from the map of elites')
             # batch_size = int(self.cfg['eval_batch_size'] * self.cfg['proportion_evo'])
-            batch_size = self.num_envs
+            batch_size = self.num_policies
             keys = [x[0] for x in self.elites_map.values()]
 
         free_keys = list(self.free_policy_keys & set(keys))

@@ -135,7 +135,7 @@ class Evaluator(EventLoopObject):
         num_actors = len(actors)
 
         # TODO: Hack?
-        if num_actors != self.vec_env.env.num_envs:
+        if self.vec_env.env.num_envs // self.cfg.num_envs_per_policy != num_actors:
             log.warn(f'Early return from Evaluator {self.object_id}\'s evaluate_batch() method because the '
                      f'vec_env object was not resized in time for the new batch of mutated actors. Releasing keys...')
             self.release_keys.emit(mutated_actor_keys)
@@ -145,18 +145,25 @@ class Evaluator(EventLoopObject):
         self.eval_id += 1
         obs = self.vec_env.reset()['obs']  # isaac gym returns dict that contains obs
 
-        rews = torch.zeros((num_actors,)).to(device)
-        dones = torch.zeros((num_actors,))
+        rews = torch.zeros((self.vec_env.env.num_environments,)).to(device)
+        cumulative_rews = [[] for _ in range(self.vec_env.env.num_environments)]
+        dones = torch.zeros((self.vec_env.env.num_environments,))
         traj_len = 1000  # trajectory length for ant env, TODO: make this generic
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():
                 logits = batch_actors(obs).view(-1)
                 acts = batch_actors.get_actions(self.action_space, logits, batch_actors.action_log_std.exp()).view(num_actors, -1) \
-                    if self.cfg.continuous_actions_sample else logits.view(num_actors, -1)
+                    if self.cfg.continuous_actions_sample else logits.view(self.vec_env.env.num_environments, -1)
                 acts = torch.clip(acts, self.low, self.high)  # isaacgym action spaces are all [-1, 1]
                 obs, rew, dones, info = self.vec_env.step(acts)
                 rews += rew
+                for i, done in enumerate(dones):
+                    if done:
+                        # the vec_env will auto reset the env at this index, so we reset our reward counter
+                        cumulative_rews[i].append(rews[i].cpu().numpy())
+                        rews[i] = 0
+
                 ep_lengths = info['ep_lengths']
                 if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
                     dones = torch.ones_like(dones)
@@ -168,12 +175,14 @@ class Evaluator(EventLoopObject):
         ep_lengths = info['ep_lengths']
         avg_ep_length = torch.mean(ep_lengths)
         frames = sum(ep_lengths).cpu().numpy()
-        bds = info['desc'].cpu().numpy()  # behavior descriptors
-        rews = rews.cpu().numpy()
+        bds = info['desc'].cpu().numpy().reshape(num_actors, self.cfg.num_envs_per_policy, -1)  # behavior descriptors
+        bds = np.mean(bds, axis=1)
+        mean_rewards = np.vstack([sum(cumulative_rews[i]) / len(cumulative_rews[i]) for i in range(len(cumulative_rews))]).reshape(num_actors, self.cfg.num_envs_per_policy)
+        mean_rewards = np.mean(mean_rewards, axis=1)
 
         agents = []
         mutated_actor_keys_repeated = np.repeat(mutated_actor_keys, repeats=self.cfg.mutations_per_policy)  # repeat keys M times b/c actors parents were mutated M times
-        for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys_repeated, bds, rews):
+        for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys_repeated, bds, mean_rewards):
             agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
                                genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
                                phenotype=desc, fitness=rew)

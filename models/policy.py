@@ -28,3 +28,8 @@ class Policy(ABC, nn.Module):
             cov_mat = torch.diag(scale)
             return MultivariateNormal(loc=raw_logits, covariance_matrix=cov_mat)
 
+    def load(self, filename):
+        self.load_state_dict(torch.load(filename, map_location=torch.device('cpu')))
+
+    def save(self, filename):
+        torch.save(self.state_dict(), filename)

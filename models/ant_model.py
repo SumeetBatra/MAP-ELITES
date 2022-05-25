@@ -5,10 +5,10 @@ from models.policy import Policy
 
 
 def ant_model_factory(device, hidden_size=256, init_type='xavier_uniform', share_memory=True):
-    model = AntNN(hidden_size=hidden_size, init_type=init_type)
+    model = AntNN(hidden_size=hidden_size, init_type=init_type).to(device)
     model.apply(model.init_weights)
     if share_memory:
-        model.to(device).share_memory()
+        model.share_memory()
     return model
 
 
