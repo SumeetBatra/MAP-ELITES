@@ -18,4 +18,4 @@ srun python -m train_isaac \
               --n_niches=1024 \
               --num_agents=512 \
               --mutations_per_policy=4 \
-              --num_envs_per_agent=10
+              --num_envs_per_policy=10
