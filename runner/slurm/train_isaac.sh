@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:1
 #SBATCH -N1
 #SBATCH -n1
 #SBATCH -c32
@@ -8,7 +8,7 @@
 srun python -m train_isaac \
               --random_init=64 \
               --random_init_batch=512 \
-              --max_evals=1000000 \
+              --max_evals=100000000 \
               --mutation_op=gaussian_mutation \
               --crossover_op=iso_dd \
               --proportion_evo=1.0 \
