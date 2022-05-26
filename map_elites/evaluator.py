@@ -137,7 +137,8 @@ class Evaluator(EventLoopObject):
         # TODO: Hack?
         if self.vec_env.env.num_envs // self.cfg.num_envs_per_policy != num_actors:
             log.warn(f'Early return from Evaluator {self.object_id}\'s evaluate_batch() method because the '
-                     f'vec_env object was not resized in time for the new batch of mutated actors. Releasing keys...')
+                     f'vec_env object was not resized in time for the new batch of mutated actors. Num envs: {self.vec_env.env.num_envs}, '
+                     f' Num actors: {num_actors}, envs per policy: {self.cfg.num_envs_per_policy}. Releasing keys...')
             self.release_keys.emit(mutated_actor_keys)
             return
 

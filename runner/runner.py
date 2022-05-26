@@ -13,6 +13,7 @@ from utils.utils import cfg_dict, get_checkpoints
 from map_elites import common as cm
 from map_elites.evaluator import Evaluator, UNUSED, MAPPED
 from map_elites.variation import VariationOperator
+from map_elites.trainer import Trainer
 from typing import List
 from utils.vectorized import BatchMLP
 from models.policy import Policy
@@ -47,6 +48,7 @@ class Runner(EventLoopObject):
         self.max_evals = cfg.max_evals
 
         # other event loops
+        self.trainers = None
         self.variation_op, self.evaluators = None, None
         self.component_ids = []  # Other EventLoopObject component ids
 
@@ -264,6 +266,35 @@ class Runner(EventLoopObject):
 
         if not self.component_ids:
             self.event_loop.stop()
+
+    def init_loops(self, trainers):
+        '''
+        This is where we connect signals to slots and start various event loops for training
+        '''
+        self.trainers: List[Trainer] = trainers
+
+        for trainer in self.trainers:
+            self.event_loop.start.connect(trainer.on_start)
+            mutator, evaluator = trainer.get_components()
+
+            # start the evaluators
+            self.event_loop.start.connect(evaluator.init_env)
+            # auxiliary connections for logging
+            evaluator.eval_results.connect(self.on_eval_results)
+            evaluator.eval_results.connect(mutator.on_eval_results)
+            # allow for dynamic resizing of num_envs during runtime
+            mutator.resize_vec_env.connect(evaluator.resize_env)
+            # early release keys if mismatch b/w vec-env size and # of mutated agents received
+            evaluator.release_keys.connect(mutator.on_release)  # TODO: send keys to runner which sends to all mutators
+
+            # stop the components
+            self.stop.connect(trainer.on_stop)
+            trainer.stop.connect(mutator.on_stop)
+            mutator.stop.connect(evaluator.on_stop)
+            trainer.stop.connect(self._on_component_stopped)
+
+        self.component_ids = [trainer.object_id for trainer in self.trainers]
+
 
     def init_loops(self, variation_op, evaluators):
         '''

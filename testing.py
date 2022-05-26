@@ -17,6 +17,7 @@ from attrdict import AttrDict
 from envs.isaacgym.make_env import make_gym_env
 import copy
 import psutil
+from modelsize import SizeEstimator
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,16 +157,20 @@ if __name__ == '__main__':
     mutations_per_policy = 10
     num_policies = int(n_niches * mutations_per_policy)
 
+    t = torch.ones((10240, 41872)).to(torch.device('cpu')).share_memory_()
+    mlp = ant_model_factory(torch.device('cpu'), 128, share_memory=True)
+    se = SizeEstimator(mlp, input_size=(10, 60))
+    print(se.estimate_size())
     print(f'{num_policies=}')
-    torch.multiprocessing.set_sharing_strategy('file_system')
-    time.sleep(3)
-    device = torch.device('cpu')
-    mlps = []
-    for _ in range(num_policies):
-        mlp = ant_model_factory(device, 128, share_memory=True)
-        mlps.append(mlp)
-        torch.cuda.empty_cache()
-        print(f'Num mlps: {len(mlps)}')
-        print(f'RAM Memory % used: {psutil.virtual_memory()[2]}')
-
-    print(f'{len(mlps)=}')
+    # torch.multiprocessing.set_sharing_strategy('file_system')
+    # time.sleep(3)
+    # device = torch.device('cpu')
+    # mlps = []
+    # for _ in range(num_policies):
+    #     mlp = ant_model_factory(device, 128, share_memory=True)
+    #     mlps.append(mlp)
+    #     torch.cuda.empty_cache()
+    #     print(f'Num mlps: {len(mlps)}')
+    #     print(f'RAM Memory % used: {psutil.virtual_memory()[2]}')
+    #
+    # print(f'{len(mlps)=}')

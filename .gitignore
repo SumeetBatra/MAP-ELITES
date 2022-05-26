@@ -7,3 +7,4 @@ results/
 checkpoints/
 batch_inference.py
 downloaded_checkpoints
+modelsize.py

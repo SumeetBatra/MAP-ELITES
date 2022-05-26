@@ -19,7 +19,7 @@ def parse_args():
     return args
 
 def enjoy(cfg, policy_path, render=True, repeat=False):
-    cfg['num_agents'] = 10
+    cfg['num_agents'] = 1
     cfg['headless'] = not render
     cfg['mutations_per_policy'] = 1
     env = make_gym_env(cfg)
