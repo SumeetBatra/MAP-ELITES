@@ -48,7 +48,7 @@ class Individual(object):
         return next_id
 
 
-class Evaluator(EventLoopObject):
+class Evaluator():
     def __init__(self,
                  cfg,
                  all_actors,
@@ -58,13 +58,10 @@ class Evaluator(EventLoopObject):
                  seed,
                  num_gpus,
                  kdt,
-                 event_loop,
-                 object_id,
                  gpu_id):
         '''
         A class for batch evaluations of mutated policies
         '''
-        super().__init__(event_loop, object_id)
         self.cfg = cfg
         self.vec_env = None
         self.high, self.low = None, None
@@ -80,30 +77,11 @@ class Evaluator(EventLoopObject):
         self.gpu_id = gpu_id
         self.sim_device = f'cuda:{self.gpu_id}'
 
-    @signal
-    def stop(self): pass
-
-    @signal
-    def request_new_batch(self): pass
-
-    @signal
-    def request_from_init_map(self): pass  # send this signal until init_map() has produced enough policies
-
-    @signal
-    def init_elites_map(self): pass
-
-    @signal
-    def release_keys(self): pass
-
-    @signal
-    def init_success(self): pass
-
     def init_env(self):
         self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
         self.high = torch.tensor(self.vec_env.env.action_space.high).to(self.sim_device)
         self.low = torch.tensor(self.vec_env.env.action_space.low).to(self.sim_device)
         self.action_space = self.vec_env.env.action_space
-        self.init_success.emit()
 
     def resize_env(self, num_envs):
         self.cfg.num_agents = num_envs
@@ -136,8 +114,7 @@ class Evaluator(EventLoopObject):
             log.warn(f'Early return from Evaluator {self.object_id}\'s evaluate_batch() method because the '
                      f'vec_env object was not resized in time for the new batch of mutated actors. Num envs: {self.vec_env.env.num_envs}, '
                      f' Num actors: {num_actors}, envs per policy: {self.cfg.num_envs_per_policy}. Releasing keys...')
-            self.release_keys.emit(mutated_actor_keys)
-            return
+            return mutated_actor_keys
 
         self.vec_env.seed(int((self.seed * 100) * self.eval_id))
         self.eval_id += 1
@@ -190,10 +167,6 @@ class Evaluator(EventLoopObject):
     def close_envs(self):
         self.vec_env.close()
 
-    def on_stop(self, oid):
+    def on_stop(self):
         self.close_envs()
-        self.stop.emit(self.object_id)
-        if isinstance(self.event_loop.process, EventLoopProcess):
-            self.event_loop.stop()
-        self.detach()
         log.debug('Done!')

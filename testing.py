@@ -153,15 +153,15 @@ if __name__ == '__main__':
     #
     # print(f'Took {replace_time} seconds to replace {len(backup_mlps)} MLPs')
 
-    n_niches = 1024
-    mutations_per_policy = 10
-    num_policies = int(n_niches * mutations_per_policy)
-
-    t = torch.ones((10240, 41872)).to(torch.device('cpu')).share_memory_()
-    mlp = ant_model_factory(torch.device('cpu'), 128, share_memory=True)
-    se = SizeEstimator(mlp, input_size=(10, 60))
-    print(se.estimate_size())
-    print(f'{num_policies=}')
+    # n_niches = 1024
+    # mutations_per_policy = 10
+    # num_policies = int(n_niches * mutations_per_policy)
+    #
+    # t = torch.ones((10240, 41872)).to(torch.device('cpu')).share_memory_()
+    # mlp = ant_model_factory(torch.device('cpu'), 128, share_memory=True)
+    # se = SizeEstimator(mlp, input_size=(10, 60))
+    # print(se.estimate_size())
+    # print(f'{num_policies=}')
     # torch.multiprocessing.set_sharing_strategy('file_system')
     # time.sleep(3)
     # device = torch.device('cpu')
@@ -174,3 +174,11 @@ if __name__ == '__main__':
     #     print(f'RAM Memory % used: {psutil.virtual_memory()[2]}')
     #
     # print(f'{len(mlps)=}')
+
+    m = multiprocessing.Manager()
+    l = m.list(range(1000))
+    start = time.time()
+    for i in range(1000):
+        l.remove(i)
+    end = time.time() - start
+    print(end)

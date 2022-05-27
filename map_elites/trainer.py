@@ -10,8 +10,9 @@ from models.policy import Policy
 
 
 class Trainer(EventLoopObject):
-    def __init__(self, all_actors, elites_map, kdt, mutator, evaluator, event_loop, object_id):
+    def __init__(self, cfg, all_actors, elites_map, kdt, mutator, evaluator, event_loop, object_id):
         super().__init__(event_loop, object_id)
+        self.cfg = cfg
         self.all_actors = all_actors
         self.elites_map = elites_map
         self.kdt = kdt
@@ -19,7 +20,16 @@ class Trainer(EventLoopObject):
 
         self.mutator: VariationOperator = mutator
         self.evaluator: Evaluator = evaluator
-        self.train_timer: Timer = None
+
+        self.num_policies = cfg.random_init_batch
+        self.step_size = 5  # number of new policies added to the archive before increasing the number of parallel environments
+        self.num_envs = cfg.num_agents
+        self.init_mode = True
+
+        def periodic(period, callback):
+            return Timer(self.event_loop, period).timeout.connect(callback)
+
+        periodic(10.0, self.maybe_resize_vec_env)
 
     @signal
     def stop(self): pass
@@ -30,8 +40,18 @@ class Trainer(EventLoopObject):
     @signal
     def eval_results(self): pass
 
+    @signal
+    def init_success(self): pass
+
+    def on_release_keys(self, mapped_actor_keys):
+        self.mutator.on_release(mapped_actor_keys)
+
+    def on_start(self):
+        self.evaluator.init_env()
+        self.init_success.emit()
+
     def on_stop(self):
-        self.train_timer.stop()
+        self.evaluator.on_stop()
 
     def periodic(self, period, callback):
         return Timer(self.event_loop, period).timeout.connect(callback)
@@ -39,17 +59,24 @@ class Trainer(EventLoopObject):
     def train(self):
         # mutate batch of policies if enough free policies available
         eval_res = None
-        var_res = self.mutator.maybe_mutate_new_batch()
+        batch_size = self.cfg.random_init_batch if self.init_mode else self.num_policies
+        var_res = self.mutator.maybe_mutate_new_batch(batch_size, self.init_mode)
         (mutated_policies, mutated_policy_keys) = var_res if var_res is not None else (None, None)
+
         # try to evaluate a batch of policies
         if mutated_policies is not None:
             eval_res = self.evaluator.evaluate_batch(mutated_policies, mutated_policy_keys)
         # if evaluation was successful, get metadata and map the evaluated policies into the archive
         (agents, mutated_actor_keys, frames, runtime, avg_ep_length) = eval_res if eval_res is not None else \
             (None, None, None, None, None)
+
         if agents is not None:
             metadata, evals = self._map_agents(agents, mutated_actor_keys, mutated_policies)
             self.eval_results.emit(self.object_id, metadata, evals, frames, runtime, avg_ep_length)
+            self.mutator.update_eval_queue(agents)
+        else:  # evaluation was not successful for some reason, release the keys
+            mutated_actor_keys = eval_res
+            self.mutator.on_release(mutated_actor_keys)
 
     def _map_agents(self, agents, evaluated_actors_keys, mutated_policies):
         '''
@@ -93,7 +120,7 @@ class Trainer(EventLoopObject):
                 metadata.append(agent)
         runtime = time.time() - start_time
         log.debug(f'Finished mapping elite agents in {runtime:.1f} seconds')
-        self.release_keys.emit(evaluated_actors_keys)
+        self.mutator.on_release(evaluated_actors_keys)
         return metadata, evals
 
     def _find_available_agent_id(self):
@@ -107,3 +134,20 @@ class Trainer(EventLoopObject):
 
     def get_components(self):
         return self.mutator, self.evaluator
+
+    def maybe_resize_vec_env(self):
+        init_mode = True if len(self.elites_map) <= self.cfg.random_init else False
+        if not init_mode and self.init_mode:
+            # one time resizing of vec envs to be size of elites map instead of init_batch_size
+            self.init_mode = False
+            self.num_envs = len(self.elites_map) * self.cfg.mutations_per_policy * self.cfg.num_envs_per_policy
+            self.num_policies = len(self.elites_map)
+            self.evaluator.resize_env(self.num_envs)
+
+        elif len(self.all_actors) >= len(self.elites_map) >= self.step_size + self.num_policies:
+            log.debug(f'Elites map size is now {len(self.elites_map)}')
+            log.debug(f'Resizing the number of envs from {self.cfg.mutations_per_policy * self.num_envs * self.cfg.num_envs_per_policy} to '
+                      f'{self.cfg.mutations_per_policy * len(self.elites_map) * self.cfg.num_envs_per_policy}')
+            self.num_envs = len(self.elites_map) * self.cfg.mutations_per_policy * self.cfg.num_envs_per_policy
+            self.num_policies = len(self.elites_map)
+            self.evaluator.resize_env(self.num_envs)

@@ -60,6 +60,9 @@ class Runner(EventLoopObject):
     @signal
     def run_iteration(self): pass
 
+    @signal
+    def send_keys(self): pass
+
     @property
     def report_interval(self):
         return self._report_interval
@@ -224,22 +227,17 @@ class Runner(EventLoopObject):
             # run an iteration of training from the Trainer
             self.run_iteration.connect(trainer.train)
             # start the evaluators
-            self.event_loop.start.connect(evaluator.init_env)
+            self.event_loop.start.connect(trainer.on_start)
             # evaluator lets runner know it's ready to begin
-            evaluator.init_success.connect(self.on_evaluator_ready)
+            trainer.init_success.connect(self.on_evaluator_ready)
             # auxiliary connections for logging
             trainer.eval_results.connect(self.on_eval_results)
-            trainer.eval_results.connect(mutator.on_eval_results)
-            # allow for dynamic resizing of num_envs during runtime
-            mutator.resize_vec_env.connect(evaluator.resize_env)
-            # early release keys if mismatch b/w vec-env size and # of mutated agents received
-            evaluator.release_keys.connect(self.on_release)
-            self.release_keys.connect(mutator.on_release)
+            trainer.release_keys.connect(self.on_release)
+            # allows all trainers to update their local copies of available keys
+            self.release_keys.connect(trainer.on_release_keys)
 
             # stop the components
             self.stop.connect(trainer.on_stop)
-            trainer.stop.connect(mutator.on_stop)
-            mutator.stop.connect(evaluator.on_stop)
             trainer.stop.connect(self._on_component_stopped)
 
         self.component_ids = [trainer.object_id for trainer in self.trainers]

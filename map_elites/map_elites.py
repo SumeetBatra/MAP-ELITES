@@ -79,9 +79,11 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     # create the map of elites
     elites_map = manager.dict()
 
+    # sync access to list of free keys b/w all processes
+    free_policy_keys = manager.list(range(n_niches * cfg.mutations_per_policy))
+
     # shared queues to keep track of which policies are free to mutate/being evaluated/being mapped to archive
     free_queue, eval_in_queue, map_queue = Queue(), Queue(), Queue()
-    free_policy_keys = set(list(range(n_niches)))
     # init the free queue with keys for all policies
     for i in range(len(all_actors)):
         free_queue.put(i)
@@ -124,8 +126,6 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
                               cfg.seed,
                               cfg.num_gpus,
                               kdt,
-                              event_loop=trainer_loop_i.event_loop,
-                              object_id=f'evaluator {i}',
                               gpu_id=GPU_ID)
 
         variation_op = VariationOperator(cfg,
@@ -133,8 +133,6 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
                                          elites_map,
                                          eval_in_queue,
                                          free_policy_keys,
-                                         event_loop=trainer_loop_i.event_loop,
-                                         object_id=f'mutator {i}',
                                          crossover_op=cfg.crossover_op,
                                          mutation_op=cfg.mutation_op,
                                          max_gene=cfg.max_genotype,
@@ -148,7 +146,7 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
                                          iso_sigma=cfg.iso_sigma,
                                          line_sigma=cfg.line_sigma)
 
-        trainer = Trainer(all_actors, elites_map, kdt, mutator=variation_op, evaluator=evaluator, event_loop=trainer_loop_i.event_loop, object_id=f'trainer {i}')
+        trainer = Trainer(cfg, all_actors, elites_map, kdt, mutator=variation_op, evaluator=evaluator, event_loop=trainer_loop_i.event_loop, object_id=f'trainer {i}')
         trainers.append(trainer)
         trainer_loops.append(trainer_loop_i)
         GPU_ID = (GPU_ID + 1) % cfg.num_gpus
