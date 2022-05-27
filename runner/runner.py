@@ -50,6 +50,7 @@ class Runner(EventLoopObject):
 
         self.periodic(self._report_interval, self.report_evals)
         self.periodic(self.cfg.cp_save_period_sec, self.save_checkpoint)
+        self.periodic(30.0, self.maybe_resize_vec_env)
 
     @signal
     def stop(self): pass
@@ -61,6 +62,9 @@ class Runner(EventLoopObject):
     def run_iteration(self): pass
 
     @signal
+    def check_if_resize_vec_env(self): pass
+
+    @signal
     def send_keys(self): pass
 
     @property
@@ -70,6 +74,9 @@ class Runner(EventLoopObject):
     @property
     def last_report(self):
         return self._last_report
+
+    def maybe_resize_vec_env(self):
+        self.check_if_resize_vec_env.emit()
 
     # timers for periodic logging / saving results
     def periodic(self, period, callback):
@@ -226,6 +233,8 @@ class Runner(EventLoopObject):
 
             # run an iteration of training from the Trainer
             self.run_iteration.connect(trainer.train)
+            # resize vec env if elites map gets large enough
+            self.check_if_resize_vec_env.connect(trainer.maybe_resize_vec_env)
             # start the evaluators
             self.event_loop.start.connect(trainer.on_start)
             # evaluator lets runner know it's ready to begin

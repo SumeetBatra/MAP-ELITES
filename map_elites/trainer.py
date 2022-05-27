@@ -29,7 +29,6 @@ class Trainer(EventLoopObject):
         def periodic(period, callback):
             return Timer(self.event_loop, period).timeout.connect(callback)
 
-        periodic(10.0, self.maybe_resize_vec_env)
 
     @signal
     def stop(self): pass
