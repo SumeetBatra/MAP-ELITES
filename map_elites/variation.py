@@ -14,7 +14,6 @@ class VariationOperator(EventLoopObject):
                  cfg,
                  all_actors,
                  elites_map,
-                 eval_cache,
                  eval_in_queue,
                  free_policy_keys,
                  event_loop,
@@ -36,7 +35,6 @@ class VariationOperator(EventLoopObject):
         self.cfg = cfg
         self.all_actors = all_actors
         self.elites_map = elites_map
-        self.eval_cache = eval_cache
         self.eval_in_queue = eval_in_queue
         self.free_policy_keys = free_policy_keys
         self.init_mode = True
@@ -108,7 +106,8 @@ class VariationOperator(EventLoopObject):
                 self.num_envs = self.cfg.random_init * self.cfg.mutations_per_policy * self.cfg.num_envs_per_policy
                 self.num_policies = self.cfg.random_init
                 self.resize_vec_env.emit(self.num_envs)
-            self.evolve_batch(init_mode)
+            res = self.evolve_batch(init_mode)
+            return res
 
     def maybe_resize_vec_env(self):
         if len(self.all_actors) >= len(self.elites_map) >= self.step_size + self.num_policies:
@@ -155,6 +154,7 @@ class VariationOperator(EventLoopObject):
         # remove the keys we will use from the set of all available policy keys
         self.free_policy_keys -= set(actor_x_ids)
 
+        # TODO: make sure same keys don't reference the same object in memory - otherwise need to clone policies that correspond to the same keys
         actors_x_evo = self.all_actors[actor_x_ids][:, 0]
         actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
 
@@ -165,16 +165,19 @@ class VariationOperator(EventLoopObject):
             actor_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
             actors_z = actor_z.update_mlps(copy.deepcopy(actors_x_evo))
 
-        # place in eval cache for Evaluator to evaluate
-        unique_actor_x_ids = list(set(actor_x_ids))
-        cached_actors = self.eval_cache[unique_actor_x_ids]  # get unique locations in eval_cache
-        actors_z = actors_z.reshape(-1, self.cfg.mutations_per_policy)  # b/c we repeated each policy key M times
-        for p_cache, pz in zip(cached_actors, actors_z):  # p_cache and pz are lists of mlps
-            for cached_policy, mutated_policy in zip(p_cache, pz):
-                cached_policy.load_state_dict(mutated_policy.state_dict())
         self.queued_for_eval += len(actor_x_ids)
-        self.eval_in_queue.put(unique_actor_x_ids)
-        self.to_evaluate.emit(self.object_id, init)
+        return actors_z, actor_x_ids
+
+        # # place in eval cache for Evaluator to evaluate
+        # unique_actor_x_ids = list(set(actor_x_ids))
+        # cached_actors = self.eval_cache[unique_actor_x_ids]  # get unique locations in eval_cache
+        # actors_z = actors_z.reshape(-1, self.cfg.mutations_per_policy)  # b/c we repeated each policy key M times
+        # for p_cache, pz in zip(cached_actors, actors_z):  # p_cache and pz are lists of mlps
+        #     for cached_policy, mutated_policy in zip(p_cache, pz):
+        #         cached_policy.load_state_dict(mutated_policy.state_dict())
+        # self.queued_for_eval += len(actor_x_ids)
+        # self.eval_in_queue.put(unique_actor_x_ids)
+        # self.to_evaluate.emit(self.object_id, init)
 
     def flush(self, q):
         '''

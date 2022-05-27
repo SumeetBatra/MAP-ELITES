@@ -16,7 +16,7 @@ from envs.isaacgym.make_env import make_gym_env
 # flags for the archive
 UNUSED = 0
 MAPPED = 1
-TO_EVALUATE = 2
+MUTATED = 2
 EVALUATED = 3
 
 class Individual(object):
@@ -52,7 +52,6 @@ class Evaluator(EventLoopObject):
     def __init__(self,
                  cfg,
                  all_actors,
-                 eval_cache,
                  elites_map,
                  eval_in_queue,
                  batch_size,
@@ -71,7 +70,6 @@ class Evaluator(EventLoopObject):
         self.high, self.low = None, None
         self.action_space = None
         self.all_actors = all_actors
-        self.eval_cache = eval_cache
         self.elites_map = elites_map
         self.eval_in_queue = eval_in_queue
         self.batch_size = batch_size
@@ -86,9 +84,6 @@ class Evaluator(EventLoopObject):
     def stop(self): pass
 
     @signal
-    def eval_results(self): pass
-
-    @signal
     def request_new_batch(self): pass
 
     @signal
@@ -100,11 +95,15 @@ class Evaluator(EventLoopObject):
     @signal
     def release_keys(self): pass
 
+    @signal
+    def init_success(self): pass
+
     def init_env(self):
         self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
         self.high = torch.tensor(self.vec_env.env.action_space.high).to(self.sim_device)
         self.low = torch.tensor(self.vec_env.env.action_space.low).to(self.sim_device)
         self.action_space = self.vec_env.env.action_space
+        self.init_success.emit()
 
     def resize_env(self, num_envs):
         self.cfg.num_agents = num_envs
@@ -112,7 +111,6 @@ class Evaluator(EventLoopObject):
         del self.vec_env
         gc.collect()
         self.vec_env = make_gym_env(cfg=self.cfg, graphics_device_id=self.gpu_id, sim_device=self.sim_device)
-
 
     def on_evaluate(self, var_id, init_mode):
         '''
@@ -123,13 +121,12 @@ class Evaluator(EventLoopObject):
         mutated_actor_keys = self.eval_in_queue.get(block=True, timeout=1e6)
         self.evaluate_batch(mutated_actor_keys, init_mode)
 
-    def evaluate_batch(self, mutated_actor_keys, init_mode=False):
+    def evaluate_batch(self, actors, mutated_actor_keys):
         start_time = time.time()
-        batch_actors = self.eval_cache[mutated_actor_keys]
         # convert BatchMLPs to list of mlps
-        actors = np.array([])
-        for actors_list in batch_actors:
-            actors = np.concatenate((actors, actors_list))
+        # actors = np.array([])
+        # for actors_list in batch_actors:
+        #     actors = np.concatenate((actors, actors_list))
         device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
@@ -188,7 +185,7 @@ class Evaluator(EventLoopObject):
                                genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
                                phenotype=desc, fitness=rew)
             agents.append(agent)
-        self.eval_results.emit(self.object_id, agents, mutated_actor_keys, frames, runtime, avg_ep_length)
+        return agents, mutated_actor_keys, frames, runtime, avg_ep_length
 
     def close_envs(self):
         self.vec_env.close()

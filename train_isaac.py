@@ -46,7 +46,7 @@ def parse_args(argv=None):
     # args for parallelization
     parser.add_argument('--num_gpus', default=1, type=int, help='Number of gpus available on your system')
     parser.add_argument('--num_evaluators', default=1, type=int, help='Number of evaluators for parallel policy evaluation. Best to set this to the number of gpus available on your system')
-    # TODO: Not implemented
+    parser.add_argument('--num_trainers', default=1, type=int, help='Number of trainers for parallel training. Each trainer contains one mutator/evaluator for mutation/evaluation loop')
     parser.add_argument('--num_envs_per_policy', default=1, type=int, help='Number of agents that are parameterized by a single policy. Set to 1 if the policy is deterministic')
 
     # args for crossover and mutation of agent params

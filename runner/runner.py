@@ -3,7 +3,6 @@ import time
 import os
 import json
 import numpy as np
-import torch
 import wandb
 
 from collections import deque
@@ -11,18 +10,12 @@ from utils.signal_slot import EventLoop, EventLoopObject, EventLoopProcess, sign
 from utils.logger import log
 from utils.utils import cfg_dict, get_checkpoints
 from map_elites import common as cm
-from map_elites.evaluator import Evaluator, UNUSED, MAPPED
-from map_elites.variation import VariationOperator
 from map_elites.trainer import Trainer
 from typing import List
-from utils.vectorized import BatchMLP
-from models.policy import Policy
-from typing import List
-from numpy import ndarray
 
 
 class Runner(EventLoopObject):
-    def __init__(self, cfg, archive, elites_map, eval_cache, map_queue, all_actors, kdt, actors_file, filename, unique_name='runner loop'):
+    def __init__(self, cfg, archive, elites_map, all_actors, actors_file, filename, unique_name='runner loop'):
         '''
         This is the main loop that starts other event loops and processes file i/o, logging, etc
         '''
@@ -35,14 +28,10 @@ class Runner(EventLoopObject):
         # map elites objects
         self.archive = archive
         self.elites_map = elites_map
-        self.eval_cache = eval_cache
-        self.map_queue = map_queue
         self.all_actors = all_actors
-        self.kdt = kdt
         self.checkpoints_dir = self.cfg.checkpoint_dir
         self.actors_file = actors_file
         self.filename = filename
-        self.unused_keys = list(range(len(self.all_actors)))
 
         # hyperparams
         self.max_evals = cfg.max_evals
@@ -59,18 +48,17 @@ class Runner(EventLoopObject):
         self.eval_stats = deque([], maxlen=max(self.avg_stats_intervals))
         self.total_env_steps, self.total_evals = 0, 0
 
-        # timers for periodic logging / saving results
-        def periodic(period, callback):
-            return Timer(self.event_loop, period).timeout.connect(callback)
-
-        periodic(self._report_interval, self.report_evals)
-        periodic(self.cfg.cp_save_period_sec, self.save_checkpoint)
+        self.periodic(self._report_interval, self.report_evals)
+        self.periodic(self.cfg.cp_save_period_sec, self.save_checkpoint)
 
     @signal
     def stop(self): pass
 
     @signal
     def release_keys(self): pass  # release keys to policies that have finished being mapped so that the var worker can use them again
+
+    @signal
+    def run_iteration(self): pass
 
     @property
     def report_interval(self):
@@ -80,8 +68,21 @@ class Runner(EventLoopObject):
     def last_report(self):
         return self._last_report
 
-    def on_eval_results(self, oid, agents, evaluated_actors_keys, frames, runtime, avg_ep_length):
-        metadata, evals = self._map_agents(agents, evaluated_actors_keys)
+    # timers for periodic logging / saving results
+    def periodic(self, period, callback):
+        return Timer(self.event_loop, period).timeout.connect(callback)
+
+    def on_evaluator_ready(self):
+        self.periodic(3.0, self._maybe_train)  # every 3 seconds, try to run another iteration of each Trainer
+
+    def on_release(self, mutated_actor_keys):
+        '''
+        The evaluator may need to exit early and release its held keys. It will send the keys here and the runner
+        will return the keys to all the mutators
+        '''
+        self.release_keys.emit(mutated_actor_keys)
+
+    def on_eval_results(self, oid, metadata, evals, frames, runtime, avg_ep_length):
         self._update_training_stats(frames, evals)
         if self.cfg.use_wandb:
             wandb.log({'eval runtime': runtime, 'avg_ep_length': avg_ep_length})
@@ -138,65 +139,6 @@ class Runner(EventLoopObject):
                 log.debug('Removing %s', oldest_checkpoint)
                 shutil.rmtree(oldest_checkpoint)
 
-    def _find_available_agent_id(self):
-        '''
-        If an agent maps to a new cell in the elites map, need to give it a new, unused id from the pool of agents
-        :returns an agent id that's not being used by some other agent in the elites map
-        '''
-        agent_id = self.unused_keys[0]
-        del self.unused_keys[0]
-        return agent_id
-
-    def _map_agents(self, agents, evaluated_actors_keys):
-        '''
-        Map the evaluated agents using their behavior descriptors. Send the metadata back to the main process for logging
-        :param behav_descs: behavior descriptors of a batch of evaluated agents
-        :param rews: fitness scores of a batch of evaluated agents
-        '''
-        start_time = time.time()
-        metadata = []
-        evals = len(agents)
-        policies: ndarray[Policy] = self.eval_cache[evaluated_actors_keys].reshape(-1)
-
-        for policy, agent in zip(policies, agents):
-            added = False
-            niche_index = self.kdt.query([agent.phenotype], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
-            niche = self.kdt.data[niche_index]
-            n = cm.make_hashable(niche)
-            agent.centroid = n
-            if n in self.elites_map:
-                # natural selection
-                map_agent_id, fitness = self.elites_map[
-                    n]  # TODO: make sure this interface is correctly implemented
-                if agent.fitness > fitness:
-                    self.elites_map[n] = (map_agent_id, agent.fitness)
-                    agent.genotype = map_agent_id
-                    # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
-                    stored_actor, _ = self.all_actors[map_agent_id]
-                    stored_actor.load_state_dict(policy.state_dict())
-                    self.all_actors[map_agent_id] = (stored_actor, MAPPED)
-                    added = True
-            else:
-                # need to find a new, unused agent id since this agent maps to a new cell
-                agent_id = self._find_available_agent_id()
-                self.elites_map[n] = (agent_id, agent.fitness)
-                agent.genotype = agent_id
-                stored_actor, _ = self.all_actors[agent_id]
-                stored_actor.load_state_dict(policy.state_dict())
-                self.all_actors[agent_id] = (stored_actor, MAPPED)
-                added = True
-
-            if added:
-                md = (
-                agent.genotype_id, agent.fitness, str(agent.phenotype).strip("[]"), str(agent.centroid).strip("()"),
-                agent.parent_1_id, agent.parent_2_id, agent.genotype_type, agent.genotype_novel,
-                agent.genotype_delta_f)
-                metadata.append(agent)
-        runtime = time.time() - start_time
-        log.debug(f'Finished mapping elite agents in {runtime:.1f} seconds')
-        self.release_keys.emit(evaluated_actors_keys)
-        return metadata, evals
-
     def _save_archive(self, archive, all_actors, gen, archive_name, save_path, save_models=False):
         def write_array(a, f):
             for i in a:
@@ -250,6 +192,9 @@ class Runner(EventLoopObject):
         self._last_report = now
         return fps[2], eps[2]
 
+    def _maybe_train(self):
+        self.run_iteration.emit()
+
     def _maybe_stop_training(self):
         if self.total_evals >= self.max_evals:
             log.debug('Finished training. Saving the archive...')
@@ -271,21 +216,25 @@ class Runner(EventLoopObject):
         '''
         This is where we connect signals to slots and start various event loops for training
         '''
-        self.trainers: List[Trainer] = trainers
+        self.trainers: List[Trainer:EventLoopObject] = trainers
 
         for trainer in self.trainers:
-            self.event_loop.start.connect(trainer.on_start)
             mutator, evaluator = trainer.get_components()
 
+            # run an iteration of training from the Trainer
+            self.run_iteration.connect(trainer.train)
             # start the evaluators
             self.event_loop.start.connect(evaluator.init_env)
+            # evaluator lets runner know it's ready to begin
+            evaluator.init_success.connect(self.on_evaluator_ready)
             # auxiliary connections for logging
-            evaluator.eval_results.connect(self.on_eval_results)
-            evaluator.eval_results.connect(mutator.on_eval_results)
+            trainer.eval_results.connect(self.on_eval_results)
+            trainer.eval_results.connect(mutator.on_eval_results)
             # allow for dynamic resizing of num_envs during runtime
             mutator.resize_vec_env.connect(evaluator.resize_env)
             # early release keys if mismatch b/w vec-env size and # of mutated agents received
-            evaluator.release_keys.connect(mutator.on_release)  # TODO: send keys to runner which sends to all mutators
+            evaluator.release_keys.connect(self.on_release)
+            self.release_keys.connect(mutator.on_release)
 
             # stop the components
             self.stop.connect(trainer.on_stop)
@@ -296,49 +245,49 @@ class Runner(EventLoopObject):
         self.component_ids = [trainer.object_id for trainer in self.trainers]
 
 
-    def init_loops(self, variation_op, evaluators):
-        '''
-        This is where we connect signals to slots and start various event loops for training
-        :param variation_op: Variation worker mutates the policies
-        :param evaluator: Evaluates the fitness of mutated policies
-        '''
-        self.variation_op: VariationOperator = variation_op
-        self.evaluators: List[Evaluator] = evaluators
-
-        # on startup
-        # self.event_loop.start.connect(self.evaluator.init_env)  # initialize the envs after we spawn the eval's process so that we don't need to pickle the gym
-        # self.evaluator.init_elites_map.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
-        # self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
-
-        # when runner finishes mapping policies to the archive, hand them back to the var worker
-        self.release_keys.connect(self.variation_op.on_release)
-
-        for evaluator in self.evaluators:
-            # start the evaluators
-            self.event_loop.start.connect(evaluator.init_env)
-            evaluator.init_elites_map.connect(self.variation_op.evolve_batch)
-            self.variation_op.to_evaluate.connect(evaluator.on_evaluate)
-
-            # auxiliary connections for logging
-            evaluator.eval_results.connect(self.on_eval_results)
-            evaluator.eval_results.connect(self.variation_op.on_eval_results)
-
-            # allow for dynamic resizing of num_envs during runtime
-            self.variation_op.resize_vec_env.connect(evaluator.resize_env)
-            # early release keys if mismatch b/w vec-env size and # of mutated agents received
-            evaluator.release_keys.connect(self.variation_op.on_release)
-
-            # stop the evaluators
-            self.variation_op.stop.connect(evaluator.on_stop)
-            evaluator.stop.connect(self._on_component_stopped)
-
-        # stop everything when training completes
-        self.stop.connect(self.variation_op.on_stop)  # runner stops the variation worker
-        # self.variation_op.stop.connect(self.evaluator.on_stop)  # variation worker stops the evaluator
-
-        self.component_ids = [variation_op.object_id] + [eval.object_id for eval in self.evaluators]
-        self.variation_op.stop.connect(self._on_component_stopped)
-        # self.evaluator.stop.connect(self._on_component_stopped)
+    # def init_loops(self, variation_op, evaluators):
+    #     '''
+    #     This is where we connect signals to slots and start various event loops for training
+    #     :param variation_op: Variation worker mutates the policies
+    #     :param evaluator: Evaluates the fitness of mutated policies
+    #     '''
+    #     self.variation_op: VariationOperator = variation_op
+    #     self.evaluators: List[Evaluator] = evaluators
+    #
+    #     # on startup
+    #     # self.event_loop.start.connect(self.evaluator.init_env)  # initialize the envs after we spawn the eval's process so that we don't need to pickle the gym
+    #     # self.evaluator.init_elites_map.connect(self.variation_op.init_map)  # initialize the map of elites when starting the runner
+    #     # self.variation_op.to_evaluate.connect(self.evaluator.on_evaluate)  # mutating policies kickstarts the evaluator
+    #
+    #     # when runner finishes mapping policies to the archive, hand them back to the var worker
+    #     self.release_keys.connect(self.variation_op.on_release)
+    #
+    #     for evaluator in self.evaluators:
+    #         # start the evaluators
+    #         self.event_loop.start.connect(evaluator.init_env)
+    #         evaluator.init_elites_map.connect(self.variation_op.evolve_batch)
+    #         self.variation_op.to_evaluate.connect(evaluator.on_evaluate)
+    #
+    #         # auxiliary connections for logging
+    #         evaluator.eval_results.connect(self.on_eval_results)
+    #         evaluator.eval_results.connect(self.variation_op.on_eval_results)
+    #
+    #         # allow for dynamic resizing of num_envs during runtime
+    #         self.variation_op.resize_vec_env.connect(evaluator.resize_env)
+    #         # early release keys if mismatch b/w vec-env size and # of mutated agents received
+    #         evaluator.release_keys.connect(self.variation_op.on_release)
+    #
+    #         # stop the evaluators
+    #         self.variation_op.stop.connect(evaluator.on_stop)
+    #         evaluator.stop.connect(self._on_component_stopped)
+    #
+    #     # stop everything when training completes
+    #     self.stop.connect(self.variation_op.on_stop)  # runner stops the variation worker
+    #     # self.variation_op.stop.connect(self.evaluator.on_stop)  # variation worker stops the evaluator
+    #
+    #     self.component_ids = [variation_op.object_id] + [eval.object_id for eval in self.evaluators]
+    #     self.variation_op.stop.connect(self._on_component_stopped)
+    #     # self.evaluator.stop.connect(self._on_component_stopped)
 
     def run(self):
         try:
