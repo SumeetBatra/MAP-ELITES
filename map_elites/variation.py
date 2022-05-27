@@ -66,10 +66,8 @@ class VariationOperator():
         log.debug(f'Received {len(agents)} processed agents, {self.queued_for_eval=}')
 
     def on_release(self, mapped_actors_keys):
-        s = time.time()
-        self.free_policy_keys.extend(mapped_actors_keys)
-        end = time.time() - s
-        log.warn(f'TIME: {end}')
+        self.free_policy_keys.extend(list(set(mapped_actors_keys)))
+        log.debug(f"Keys released. There are now {len(self.free_policy_keys)} free keys")
 
     def maybe_mutate_new_batch(self, batch_size, init_mode):
         if self.queued_for_eval == 0:
@@ -82,6 +80,7 @@ class VariationOperator():
         :param batch_size: batch_size
         :param init: whether the elites map still needs to be initialized with random policies or not
         '''
+        evo_s = time.time()
         if init:  # initialize archive with random policies
             log.debug('Initializing the map of elites with random policies')
             keys = list(self.free_policy_keys)  # policy keys
@@ -110,11 +109,11 @@ class VariationOperator():
             actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
 
         # remove the keys we will use from the set of all available policy keys
-        for key in actor_x_ids:
+        for key in set(actor_x_ids):
             self.free_policy_keys.remove(key)
 
-        # TODO: make sure same keys don't reference the same object in memory - otherwise need to clone policies that correspond to the same keys
         actors_x_evo = self.all_actors[actor_x_ids][:, 0]
+        actors_x_evo = np.array([copy.deepcopy(policy) for policy in actors_x_evo])  # variation should modify a copy of all the tensors
         actors_y_evo = self.all_actors[actor_y_ids][:, 0] if actor_y_ids is not None else None
 
         device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
@@ -125,18 +124,9 @@ class VariationOperator():
             actors_z = actor_z.update_mlps(copy.deepcopy(actors_x_evo))
 
         self.queued_for_eval += len(actor_x_ids)
+        evo_e = time.time() - evo_s
+        log.debug(f'Variation took {evo_e:.3f} seconds')
         return actors_z, actor_x_ids
-
-        # # place in eval cache for Evaluator to evaluate
-        # unique_actor_x_ids = list(set(actor_x_ids))
-        # cached_actors = self.eval_cache[unique_actor_x_ids]  # get unique locations in eval_cache
-        # actors_z = actors_z.reshape(-1, self.cfg.mutations_per_policy)  # b/c we repeated each policy key M times
-        # for p_cache, pz in zip(cached_actors, actors_z):  # p_cache and pz are lists of mlps
-        #     for cached_policy, mutated_policy in zip(p_cache, pz):
-        #         cached_policy.load_state_dict(mutated_policy.state_dict())
-        # self.queued_for_eval += len(actor_x_ids)
-        # self.eval_in_queue.put(unique_actor_x_ids)
-        # self.to_evaluate.emit(self.object_id, init)
 
     def flush(self, q):
         '''

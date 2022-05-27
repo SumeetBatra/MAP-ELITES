@@ -101,17 +101,13 @@ class Evaluator():
 
     def evaluate_batch(self, actors, mutated_actor_keys):
         start_time = time.time()
-        # convert BatchMLPs to list of mlps
-        # actors = np.array([])
-        # for actors_list in batch_actors:
-        #     actors = np.concatenate((actors, actors_list))
         device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         batch_actors = BatchMLP(actors, device)
         num_actors = len(actors)
 
         # TODO: Hack?
         if self.vec_env.env.num_envs // self.cfg.num_envs_per_policy != num_actors:
-            log.warn(f'Early return from Evaluator {self.object_id}\'s evaluate_batch() method because the '
+            log.warn(f'Early return from Evaluator\'s evaluate_batch() method because the '
                      f'vec_env object was not resized in time for the new batch of mutated actors. Num envs: {self.vec_env.env.num_envs}, '
                      f' Num actors: {num_actors}, envs per policy: {self.cfg.num_envs_per_policy}. Releasing keys...')
             return mutated_actor_keys

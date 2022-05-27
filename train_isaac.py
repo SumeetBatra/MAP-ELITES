@@ -67,7 +67,6 @@ def parse_args(argv=None):
     parser.add_argument('--mutations_per_policy', default=10, type=int, help='Number of times to mutate a single policy (policy is stored as a batch of mutated policies)')
 
     # args for isaac gym
-    parser.add_argument('--num_agents', default=10, type=int, help='Number of parallel envs in vectorized env')
     parser.add_argument('--headless', default=True, type=str2bool, help='Choose whether or not to render the scene')
 
     # nn parameters
@@ -101,6 +100,9 @@ def main():
         os.mkdir(cfg.save_path)
     if not os.path.exists(cfg.checkpoint_dir):
         os.mkdir(cfg.checkpoint_dir)
+
+    # add num_agents for isaac gym
+    cfg['num_agents'] = cfg.num_envs_per_policy * cfg.random_init_batch * cfg.mutations_per_policy
 
     log.debug(f'############## PARAMETERS #########################')
     for key, val in cfg.items():
