@@ -66,11 +66,11 @@ class Trainer(EventLoopObject):
         if mutated_policies is not None:
             eval_res = self.evaluator.evaluate_batch(mutated_policies, mutated_policy_keys)
         # if evaluation was successful, get metadata and map the evaluated policies into the archive
-        (agents, mutated_actor_keys, frames, runtime, avg_ep_length) = eval_res if eval_res is not None else \
+        (agents, mutated_actor_keys, frames, runtime, avg_ep_length, evals) = eval_res if eval_res is not None else \
             (None, None, None, None, None)
 
         if agents is not None:
-            metadata, evals = self._map_agents(agents, mutated_actor_keys, mutated_policies)
+            metadata = self._map_agents(agents, mutated_actor_keys, mutated_policies)
             self.eval_results.emit(self.object_id, metadata, evals, frames, runtime, avg_ep_length)
             self.mutator.update_eval_queue(agents)
         else:  # evaluation was not successful for some reason, release the keys
@@ -85,7 +85,6 @@ class Trainer(EventLoopObject):
         '''
         start_time = time.time()
         metadata = []
-        evals = len(agents)
 
         for policy, agent in zip(mutated_policies, agents):
             added = False
@@ -120,7 +119,7 @@ class Trainer(EventLoopObject):
         runtime = time.time() - start_time
         log.debug(f'Finished mapping elite agents in {runtime:.1f} seconds')
         self.mutator.on_release(evaluated_actors_keys)
-        return metadata, evals
+        return metadata
 
     def _find_available_agent_id(self):
         '''

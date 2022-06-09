@@ -120,6 +120,7 @@ class Evaluator():
         cumulative_rews = [[] for _ in range(self.vec_env.env.num_environments)]
         dones = torch.zeros((self.vec_env.env.num_environments,))
         traj_len = 1000  # trajectory length for ant env, TODO: make this generic
+        num_evals = 0
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():
@@ -134,6 +135,7 @@ class Evaluator():
                         # the vec_env will auto reset the env at this index, so we reset our reward counter
                         cumulative_rews[i].append(rews[i].cpu().numpy())
                         rews[i] = 0
+                        num_evals += 1
 
                 ep_lengths = info['ep_lengths']
                 if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
@@ -162,7 +164,7 @@ class Evaluator():
                                genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
                                phenotype=desc, fitness=rew)
             agents.append(agent)
-        return agents, mutated_actor_keys, frames, runtime, avg_ep_length
+        return agents, mutated_actor_keys, frames, runtime, avg_ep_length, num_evals
 
     def close_envs(self):
         self.vec_env.close()
