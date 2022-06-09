@@ -139,6 +139,10 @@ class Evaluator():
                 if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
                     dones = torch.ones_like(dones)
 
+        for i in range(self.cfg.num_agents):
+            if rews[i] != 0:  # for each agent, if sim ended at T=1000 without triggering the done flag, then there will be one hanging episode that wasn't stored in cumulative-rewards
+                cumulative_rews[i].append(rews[i].cpu().numpy())
+
         runtime = time.time() - start_time
         log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
 
