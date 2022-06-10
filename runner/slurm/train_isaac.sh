@@ -16,5 +16,5 @@ srun python -m train_isaac \
               --num_gpus=1 \
               --num_evaluators=1 \
               --n_niches=1024 \
-              --mutations_per_policy=50 \
+              --mutations_per_policy=100 \
               --num_envs_per_policy=1
