@@ -39,7 +39,9 @@ def make_gym_env(cfg=None, env_config=None, graphics_device_id=0, sim_device='cu
     with open(cfg_file, 'r') as yaml_stream:
         task_cfg = yaml.safe_load(yaml_stream)
 
+    # override default yaml params by params passed by the user in train_isaac.py
     task_cfg['env']['numEnvs'] = cfg.num_agents
+    task_cfg['env']['episodeLength'] = cfg.episode_length
     task_cfg['rl_device'] = sim_device
     task_cfg['env']['headingWeight'] = 0.0
 

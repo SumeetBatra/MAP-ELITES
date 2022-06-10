@@ -115,7 +115,7 @@ class Evaluator():
         rews = torch.zeros((self.vec_env.env.num_environments,)).to(device)
         cumulative_rews = [[] for _ in range(self.vec_env.env.num_environments)]
         dones = torch.zeros((self.vec_env.env.num_environments,))
-        traj_len = 1000  # trajectory length for ant env, TODO: make this generic
+        traj_len = self.cfg.episode_length
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():

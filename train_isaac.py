@@ -68,6 +68,7 @@ def parse_args(argv=None):
 
     # args for isaac gym
     parser.add_argument('--headless', default=True, type=str2bool, help='Choose whether or not to render the scene')
+    parser.add_argument('--episode_length', default=1000, type=int, help='Number of env steps before episode termination (if robot doesnt fail before then)')
 
     # nn parameters
     parser.add_argument('--hidden_size', default=128, type=int, help='Hidden size of the mlp ')
@@ -101,7 +102,7 @@ def main():
     if not os.path.exists(cfg.checkpoint_dir):
         os.mkdir(cfg.checkpoint_dir)
 
-    # add num_agents for isaac gym
+    # add params for isaac gym
     cfg['num_agents'] = cfg.num_envs_per_policy * cfg.random_init_batch * cfg.mutations_per_policy
 
     log.debug(f'############## PARAMETERS #########################')
