@@ -17,4 +17,5 @@ srun python -m train_isaac \
               --num_evaluators=1 \
               --n_niches=1024 \
               --mutations_per_policy=100 \
-              --num_envs_per_policy=1
+              --num_envs_per_policy=1 \
+              --episode_length=100
