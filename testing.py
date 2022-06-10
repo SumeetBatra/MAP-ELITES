@@ -175,10 +175,21 @@ if __name__ == '__main__':
     #
     # print(f'{len(mlps)=}')
 
-    m = multiprocessing.Manager()
-    l = m.list(range(1000))
-    start = time.time()
-    for i in range(1000):
-        l.remove(i)
-    end = time.time() - start
-    print(end)
+
+    num_mlps = 1000
+    mlps = []
+    for i in range(num_mlps):
+        mlp = ant_model_factory(device, hidden_size=128, share_memory=True)
+        mlps.append(mlp)
+
+    model_fn = partial(ant_model_factory)
+    b = BatchMLP(device, model_fn, np.array(mlps))
+    new_mlps = []
+    for i in range(2):
+        new_mlp = ant_model_factory(device, hidden_size=128, share_memory=True)
+        new_mlps.append(new_mlp)
+    new_mlps[0].layers[0].weight.data = torch.zeros_like(new_mlps[0].layers[0].weight.data)
+    b[42, 69] = new_mlps
+    print(b)
+
+
