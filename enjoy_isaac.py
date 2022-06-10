@@ -87,7 +87,7 @@ def enjoy_many(cfg, policy_paths=None, render=True, repeat=False):
         actor.to(device)
         actors.append(actor)
 
-    actors = BatchMLP(np.array(actors), device)
+    actors = BatchMLP(device, np.array(actors))
     act_sense(cfg, env, actors, obs_low, obs_high, repeat)  # main simulation loop
 
     env.env.destroy()

@@ -13,11 +13,6 @@ from map_elites import common as cm
 from collections import deque
 from envs.isaacgym.make_env import make_gym_env
 
-# flags for the archive
-UNUSED = 0
-MAPPED = 1
-MUTATED = 2
-EVALUATED = 3
 
 class Individual(object):
     _ids = count(0)
@@ -102,7 +97,8 @@ class Evaluator():
     def evaluate_batch(self, actors, mutated_actor_keys):
         start_time = time.time()
         device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
-        batch_actors = BatchMLP(actors, device)
+        # batch_actors = BatchMLP(device, actors)
+        batch_actors = actors.to(device)  # actors passed in from variation operator is already a BatchMLP
         num_actors = len(actors)
 
         # TODO: Hack?

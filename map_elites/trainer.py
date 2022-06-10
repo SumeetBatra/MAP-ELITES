@@ -2,7 +2,7 @@ import time
 
 from numpy import ndarray
 from map_elites import common as cm
-from map_elites.evaluator import Evaluator, MAPPED
+from map_elites.evaluator import Evaluator
 from map_elites.variation import VariationOperator
 from utils.signal_slot import EventLoopObject, signal, Timer
 from utils.logger import log
@@ -102,7 +102,7 @@ class Trainer(EventLoopObject):
                     # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
                     stored_actor, _ = self.all_actors[map_agent_id]
                     stored_actor.load_state_dict(policy.state_dict())
-                    self.all_actors[map_agent_id] = (stored_actor, MAPPED)
+                    self.all_actors[map_agent_id] = stored_actor
                     added = True
             else:
                 # need to find a new, unused agent id since this agent maps to a new cell
@@ -111,7 +111,7 @@ class Trainer(EventLoopObject):
                 agent.genotype = agent_id
                 stored_actor, _ = self.all_actors[agent_id]
                 stored_actor.load_state_dict(policy.state_dict())
-                self.all_actors[agent_id] = (stored_actor, MAPPED)
+                self.all_actors[agent_id] = stored_actor
                 added = True
 
             if added:
