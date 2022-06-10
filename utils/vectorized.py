@@ -225,5 +225,5 @@ def combine(batch_mlps: List[BatchMLP]):
             blocks.append(new_block)
         else:  # nonlinearity
             blocks.append(all_layers[0][i])
-    res = BatchMLP(batch_mlps[0].cfg, device, mlps=None, blocks=blocks, std_devs=std_devs, num_mlps=num_mlps, mlp_ids=mlp_ids)
+    res = BatchMLP(batch_mlps[0].cfg, device, batch_mlps[0].model_fn, mlps=None, blocks=blocks, std_devs=std_devs, num_mlps=num_mlps, mlp_ids=mlp_ids)
     return res

@@ -20,7 +20,7 @@ from faster_fifo import Queue
 from map_elites.variation import VariationOperator
 from map_elites.evaluator import Evaluator
 from map_elites.trainer import Trainer
-from utils.vectorized import BatchMLP
+from utils.vectorized import BatchMLP, combine
 from torch.multiprocessing import Process as TorchProcess, Pipe
 from functools import partial
 
@@ -63,8 +63,12 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
 
     # save all actors in one giant BatchMLP object to reduce the number of open file descriptors and shared memory usage (b/c of this bug: https://github.com/pytorch/pytorch/issues/78274)
     model_fn = partial(ant_model_factory)
-    all_actors = [ant_model_factory(device, hidden_size=cfg.hidden_size, share_memory=True) for _ in range(n_niches * cfg.mutations_per_policy)]
-    all_actors = BatchMLP(cfg, device, model_fn, np.array(all_actors))
+    all_actors = []
+    for _ in range(cfg.mutations_per_policy): # need to do it this way to reduce number of open file descriptors at any given time, also b/c of the bug from previous comment
+        mlps = [ant_model_factory(device, hidden_size=cfg.hidden_size, share_memory=True) for _ in range(n_niches)]
+        batch_mlps = BatchMLP(cfg, device, model_fn, np.array(mlps))
+        all_actors.append(batch_mlps)
+    all_actors = combine(all_actors)
 
 
     # keep track of Individuals()
