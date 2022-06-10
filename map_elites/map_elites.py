@@ -22,6 +22,7 @@ from map_elites.evaluator import Evaluator
 from map_elites.trainer import Trainer
 from utils.vectorized import BatchMLP
 from torch.multiprocessing import Process as TorchProcess, Pipe
+from functools import partial
 
 from map_elites import common as cm
 from utils.logger import log, config_wandb
@@ -60,15 +61,10 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     # since tensors are using shared memory, changes to tensors in one process will be reflected across all processes
     # all_actors = np.array([(ant_model_factory(device, hidden_size=cfg.hidden_size), UNUSED) for _ in range(n_niches * cfg.mutations_per_policy)])
 
-    all_actors = []
-    for n in range(n_niches):
-        mlps = []
-        for m in range(cfg.mutations_per_policy):
-            policy = ant_model_factory(device, hidden_size=cfg.hidden_size)
-            mlps.append(policy)
-        actors = BatchMLP(device, np.array(mlps))
-        all_actors.append(actors)
-    all_actors = np.array(all_actors)
+    # save all actors in one giant BatchMLP object to reduce the number of open file descriptors and shared memory usage (b/c of this bug: https://github.com/pytorch/pytorch/issues/78274)
+    model_fn = partial(ant_model_factory)
+    all_actors = [ant_model_factory(device, hidden_size=cfg.hidden_size, share_memory=True) for _ in range(n_niches * cfg.mutations_per_policy)]
+    all_actors = BatchMLP(cfg, device, model_fn, np.array(all_actors))
 
 
     # keep track of Individuals()
@@ -83,7 +79,7 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     elites_map = manager.dict()
 
     # sync access to list of free keys b/w all processes
-    free_policy_keys = manager.list(range(n_niches))  # previously n_niches * mutations_per_policy M, but now M mlps stored in one batchMLP
+    free_policy_keys = manager.list(range(n_niches * cfg.mutations_per_policy))
 
     # shared queues to keep track of which policies are free to mutate/being evaluated/being mapped to archive
     free_queue, eval_in_queue, map_queue = Queue(), Queue(), Queue()

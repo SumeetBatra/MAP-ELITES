@@ -183,7 +183,7 @@ if __name__ == '__main__':
         mlps.append(mlp)
 
     model_fn = partial(ant_model_factory)
-    b = BatchMLP(device, model_fn, np.array(mlps))
+    b = BatchMLP({'hidden_size': 128}, device, model_fn, np.array(mlps))
     new_mlps = []
     for i in range(2):
         new_mlp = ant_model_factory(device, hidden_size=128, share_memory=True)

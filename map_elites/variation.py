@@ -101,31 +101,28 @@ class VariationOperator():
 
         if self.mutation_op and not self.crossover_op:
             actor_x_ids = np.random.choice(free_keys, size=batch_size, replace=False)
-            # actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
+            actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
 
         elif self.crossover_op:
             actor_x_ids = np.random.choice(free_keys, size=batch_size, replace=False)
             actor_y_ids = np.random.choice(free_keys, size=batch_size, replace=False)
-            # actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
-            # actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
+            actor_x_ids = np.repeat(actor_x_ids, repeats=self.cfg.mutations_per_policy)
+            actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
 
         # remove the keys we will use from the set of all available policy keys
         for key in set(actor_x_ids):
             self.free_policy_keys.remove(key)
 
-        batch_actors_x_evo = self.all_actors[actor_x_ids]
+        actors_x_evo = self.all_actors[actor_x_ids]
         # actors_x_evo = np.array([copy.deepcopy(policy) for policy in actors_x_evo])  # variation should modify a copy of all the tensors
-        batch_actors_y_evo = self.all_actors[actor_y_ids] if actor_y_ids is not None else None
+        actors_y_evo = self.all_actors[actor_y_ids] if actor_y_ids is not None else None
 
         device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
-        batch_actors_x = combine(batch_actors_x_evo).to(device)  # TODO: make sure this works
-        batch_actors_y = combine(batch_actors_y_evo).to(device) if batch_actors_y_evo is not None else None
         # batch_actors_x = BatchMLP(actors_x_evo, device)
         # batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
         with torch.no_grad():
-            actor_z = self.evo(batch_actors_x, batch_actors_y, device, self.crossover_op, self.mutation_op)
-            # actors_z = actor_z.update_batch_mlps(copy.deepcopy(batch_actors_x_evo))
-            # actors_z = actor_z.update_mlps(copy.deepcopy(actors_x_evo))
+            actor_z = self.evo(actors_x_evo, actors_y_evo, device, self.crossover_op, self.mutation_op)
+            # actors_z = actor_z.mlps # list of mlps view of the BatchMLP object
 
         self.queued_for_eval += len(actor_x_ids)
         evo_e = time.time() - evo_s

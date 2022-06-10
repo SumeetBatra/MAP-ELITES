@@ -70,6 +70,7 @@ class Trainer(EventLoopObject):
             (None, None, None, None, None)
 
         if agents is not None:
+            mutated_policies = mutated_policies.mlps  # list of mlps view of policies
             metadata = self._map_agents(agents, mutated_actor_keys, mutated_policies)
             self.eval_results.emit(self.object_id, metadata, evals, frames, runtime, avg_ep_length)
             self.mutator.update_eval_queue(agents)
@@ -100,7 +101,7 @@ class Trainer(EventLoopObject):
                     self.elites_map[n] = (map_agent_id, agent.fitness)
                     agent.genotype = map_agent_id
                     # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
-                    stored_actor, _ = self.all_actors[map_agent_id]
+                    stored_actor = self.all_actors[map_agent_id].mlps[0]
                     stored_actor.load_state_dict(policy.state_dict())
                     self.all_actors[map_agent_id] = stored_actor
                     added = True
@@ -109,7 +110,7 @@ class Trainer(EventLoopObject):
                 agent_id = self._find_available_agent_id()
                 self.elites_map[n] = (agent_id, agent.fitness)
                 agent.genotype = agent_id
-                stored_actor, _ = self.all_actors[agent_id]
+                stored_actor = self.all_actors[agent_id].mlps[0]
                 stored_actor.load_state_dict(policy.state_dict())
                 self.all_actors[agent_id] = stored_actor
                 added = True

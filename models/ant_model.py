@@ -31,9 +31,8 @@ class AntNN(Policy):
             nn.Tanh(),
             nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, action_dim)
+            nn.Linear(hidden_size, action_dim),
+            nn.Tanh()
         )
         self._action_log_std = nn.Parameter(torch.zeros(action_dim,))
 

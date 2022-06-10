@@ -166,7 +166,7 @@ class Runner(EventLoopObject):
                 f.write(str(k.genotype_id) + ' ')
                 f.write("\n")
                 if save_models:
-                    all_actors[k.genotype][0].save(model_path + archive_name + '_actor_' + str(k.genotype_id) + '.pt')
+                    all_actors[k.genotype].mlps[0].save(model_path + archive_name + '_actor_' + str(k.genotype_id) + '.pt')
 
     def _save_cfg(self, cfg, save_path):
         cfg = cfg_dict(cfg)

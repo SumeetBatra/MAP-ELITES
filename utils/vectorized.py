@@ -32,7 +32,7 @@ class BatchLinearBlock(nn.Module):
 
 
 class BatchMLP(Policy):
-    def __init__(self, device, model_fn, mlps=None, blocks=None, std_devs=None, num_mlps=0, mlp_ids=None):
+    def __init__(self, cfg, device, model_fn, mlps=None, blocks=None, std_devs=None, num_mlps=0, mlp_ids=None):
         '''
         There are two ways to create a BatchMLP model:
         Method 1: pass in a list of mlps
@@ -47,6 +47,7 @@ class BatchMLP(Policy):
         :param mlp_ids: metadata info from the BatchMLP objects
         '''
         super().__init__()
+        self.cfg = cfg
         self.device = device
         self.model_fn: partial[nn.Module] = model_fn
 
@@ -75,6 +76,22 @@ class BatchMLP(Policy):
     @property
     def action_log_std(self):
         return self._action_log_std
+
+    @property
+    def mlps(self):
+        ''' Return a list of mlps view of the object'''
+        mlps = [self.model_fn(self.device, hidden_size=self.cfg.hidden_size, share_memory=True) for _ in range(self.num_mlps)]
+        for l, layer in enumerate(self.layers):
+            if not isinstance(layer, BatchLinearBlock):
+                continue
+            for i in range(len(mlps)):
+                mlps[i].layers[l].weight.data = layer.weight.data[i]
+                mlps[i].layers[l].bias.data = layer.bias.data[i]
+        # update the stddev tensors and mlp ids
+        for mlp, log_stddev, id in zip(mlps, self.action_log_std, self.mlp_ids):
+            mlp.action_log_std.data = log_stddev.data
+            mlp.id = id
+        return mlps
 
     def set_parent_id(self, which_parent, ids):
         assert which_parent == 1 or which_parent == 2, 'invalid parent value. Can only have 2 parents (parent 1 or parent 2)'
@@ -107,7 +124,7 @@ class BatchMLP(Policy):
 
     def _get_mlp_at_idx(self, idx):
         # create the mlp itself
-        mlp = self.model_fn(self.device)
+        mlp = self.model_fn(self.device, self.cfg.hidden_size, share_memory=True)
         # update the weights
         for l, layer in enumerate(self.layers):
             if not isinstance(layer, BatchLinearBlock):
@@ -132,69 +149,6 @@ class BatchMLP(Policy):
         # update the log_stddev
         self.action_log_std[idx].data = mlp.action_log_std.detach().clone()
 
-    # def update_mlps(self, mlps: List[nn.Module]):
-    #     '''
-    #     Update the list of mlps with the whatever parameters are stored in the BatchMLP object
-    #     The mlps that produced this object and the mlps argument must be the same size/architecture
-    #     :param mlps: list of mlps to update
-    #     :return: list of mlps with the new parameters
-    #     '''
-    #     assert len(mlps) == self.num_mlps, log.error(f'List of mlps to update must match the length of mlps that was \
-    #                                                     used to build this BatchMLP. {self.num_mlps=}, but received {len(mlps)} mlps')
-    #     for i, layer in enumerate(self.layers):
-    #         for j in range(len(mlps)):
-    #             if not isinstance(mlps[j].layers[i], nn.Linear):
-    #                 continue
-    #             mlps[j].layers[i].weight.data = layer.weight[j]
-    #             mlps[j].layers[i].bias.data = layer.bias[j]
-    #     # update the stddev tensors
-    #     log_stddevs = self.action_log_std.view(len(mlps), -1)
-    #     for log_stddev, mlp in zip(log_stddevs, mlps):
-    #         mlp.action_log_std.data = log_stddev
-    #     return mlps
-
-    # def update_batch_mlps(self, batch_mlps):
-    #     '''
-    #     Similar to update_mlps(), but instead we update the weights of each BatchMLP object in a list of BatchMLPs
-    #     :param batch_mlps:
-    #     :return:
-    #     '''
-    #     num_batch_mlps = self.num_mlps // batch_mlps[0].num_mlps
-    #     assert num_batch_mlps == len(batch_mlps), log.error(f'Number of batch_mlps passed in does not match the size of this BatchMLP')
-    #
-    #     for i, layer in enumerate(self.layers):
-    #         if not isinstance(layer, BatchLinearBlock):
-    #             continue
-    #         # need to reshape weights and biases since there are {mutations_per_policy} mlps per batch_mlp
-    #         layer.weight.data = layer.weight.view(num_batch_mlps, batch_mlps[0].num_mlps, *layer.weight.shape[1:])
-    #         layer.bias.data = layer.bias.view(num_batch_mlps, batch_mlps[0].num_mlps, *layer.bias.shape[1:])
-    #         for j in range(len(batch_mlps)):
-    #             batch_mlps[j].layers[i].weight.data = layer.weight[j]
-    #             batch_mlps[j].layers[i].bias.data = layer.bias[j]
-    #     # update the stddev tensors
-    #     log_stddevs = self.action_log_std.view(num_batch_mlps, -1)
-    #     for log_stddev, mlp in zip(log_stddevs, batch_mlps):
-    #         mlp.action_log_std.data = log_stddev
-    #     return batch_mlps
-
-    # def update_self(self, mlps):
-    #     '''
-    #     Opposite operation of update_mlps(). Use the weights of the mlps to update the weights of the BatchMLP
-    #     '''
-    #     assert isinstance(mlps, np.ndarray), 'mlps should be passed as a numpy ndarray'
-    #
-    #     for i, layer in enumerate(self.layers):
-    #         for j in range(len(mlps)):
-    #             if not isinstance(mlps[j].layers[i], nn.Linear):
-    #                 continue
-    #             layer.weight[j] = mlps[j].layers[i].weight.data  # TODO: make sure this works
-    #             layer.bias[j] = mlps[j].layers[i].bias.data
-    #     # update the std-dev tensors
-    #     log_std = []
-    #     for mlp in mlps:
-    #         log_std.append(mlp.action_log_std.detach().clone())
-    #     self.action_log_std.data = torch.cat(log_std).to(self.device)  # TODO: make sure this works
-
     def to_device(self, device):
         self.to(device)
         for i in range(len(self.mlps)):
@@ -210,20 +164,21 @@ class BatchMLP(Policy):
             mlps = []
             for ind in inds:
                 mlps.append(self._get_mlp_at_idx(ind))
-            return BatchMLP(self.device, self.model_fn, np.array(mlps))
-        if isinstance(key, tuple):
+            return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
+        if isinstance(key, tuple) or isinstance(key, np.ndarray) or isinstance(key, List):
             mlps = []
             for idx in key:
                 mlps.append(self._get_mlp_at_idx(idx))
-            return BatchMLP(self.device, self.model_fn, np.array(mlps))
-        return self._get_mlp_at_idx(key)
+            return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
+        mlp = self._get_mlp_at_idx(key)
+        return BatchMLP(self.cfg, self.device, self.model_fn, np.array([mlp]))
 
     def __setitem__(self, key, value):  # TODO: test
         if isinstance(key, slice):
             inds = range(*key.indices(self.num_mlps))
             for idx in inds:
                 self._update_mlp_at_idx(idx, value[idx])
-        elif isinstance(key, tuple):
+        elif isinstance(key, tuple) or isinstance(key, np.ndarray) or isinstance(key, List):
             for idx, mlp in zip(key, value):
                 self._update_mlp_at_idx(idx, mlp)
         else:
@@ -270,5 +225,5 @@ def combine(batch_mlps: List[BatchMLP]):
             blocks.append(new_block)
         else:  # nonlinearity
             blocks.append(all_layers[0][i])
-    res = BatchMLP(device, mlps=None, blocks=blocks, std_devs=std_devs, num_mlps=num_mlps, mlp_ids=mlp_ids)
+    res = BatchMLP(batch_mlps[0].cfg, device, mlps=None, blocks=blocks, std_devs=std_devs, num_mlps=num_mlps, mlp_ids=mlp_ids)
     return res

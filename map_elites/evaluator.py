@@ -116,7 +116,6 @@ class Evaluator():
         cumulative_rews = [[] for _ in range(self.vec_env.env.num_environments)]
         dones = torch.zeros((self.vec_env.env.num_environments,))
         traj_len = 1000  # trajectory length for ant env, TODO: make this generic
-        num_evals = 0
         # get a batch of trajectories and rewards
         while not all(dones):
             with torch.no_grad():
@@ -131,7 +130,6 @@ class Evaluator():
                         # the vec_env will auto reset the env at this index, so we reset our reward counter
                         cumulative_rews[i].append(rews[i].cpu().numpy())
                         rews[i] = 0
-                        num_evals += 1
 
                 ep_lengths = info['ep_lengths']
                 if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
@@ -142,6 +140,7 @@ class Evaluator():
                 cumulative_rews[i].append(rews[i].cpu().numpy())
 
         runtime = time.time() - start_time
+        num_evals = num_actors
         log.debug(f'Processed batch of {len(actors)} agents in {round(runtime, 1)} seconds')
 
 
@@ -154,6 +153,7 @@ class Evaluator():
         mean_rewards = np.mean(mean_rewards, axis=1)
 
         agents = []
+        actors = batch_actors.mlps  # get list of mlps view of the BatchMLP object
         mutated_actor_keys_repeated = np.repeat(mutated_actor_keys, repeats=self.cfg.mutations_per_policy)  # repeat keys M times b/c actors parents were mutated M times
         for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys_repeated, bds, mean_rewards):
             agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
