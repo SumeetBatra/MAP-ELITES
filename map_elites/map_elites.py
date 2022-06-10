@@ -86,10 +86,7 @@ def compute_gpu(cfg, actors_file, filename, n_niches=1000):
     free_policy_keys = manager.list(range(n_niches * cfg.mutations_per_policy))
 
     # shared queues to keep track of which policies are free to mutate/being evaluated/being mapped to archive
-    free_queue, eval_in_queue, map_queue = Queue(), Queue(), Queue()
-    # init the free queue with keys for all policies
-    for i in range(len(all_actors)):
-        free_queue.put(i)
+    eval_in_queue = Queue(max_size_bytes=int(1e5))
 
     runner = Runner(cfg, agent_archive, elites_map, all_actors, actors_file, filename)
 
