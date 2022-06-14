@@ -7,7 +7,7 @@
 
 srun python -m train_isaac \
               --random_init=256 \
-              --random_init_batch=512 \
+              --random_init_batch=800 \
               --max_evals=100000000 \
               --mutation_op=gaussian_mutation \
               --crossover_op=iso_dd \
@@ -16,6 +16,6 @@ srun python -m train_isaac \
               --num_gpus=1 \
               --num_evaluators=1 \
               --n_niches=1024 \
-              --mutations_per_policy=100 \
+              --mutations_per_policy=10 \
               --num_envs_per_policy=1 \
-              --episode_length=100
+              --episode_length=300

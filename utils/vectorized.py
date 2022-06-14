@@ -1,3 +1,5 @@
+import copy
+
 import torch
 import torch.nn as nn
 import cloudpickle
@@ -51,17 +53,17 @@ class BatchMLP(Policy):
         self.device = device
         self.model_fn: partial[nn.Module] = model_fn
 
-        if blocks is not None:
+        if blocks is not None and mlp_ids:
             assert std_devs is not None, log.error(f'Must pass std_dev parameters from other BatchMLPs to create a new BatchMLP')
             self.num_mlps = num_mlps
-            self.mlp_ids = mlp_ids
+            self.mlp_ids = np.array(mlp_ids)
             self.layers = nn.Sequential(*blocks)
             self._action_log_std = nn.Parameter(torch.cat(std_devs)).to(device)
         else:
             assert mlps is not None, log.error(f'Attempted to build the BatchMLP object using an ndarray of mlps, but no mlps were passed')
             assert isinstance(mlps, np.ndarray), 'mlps should be passed as a numpy ndarray'
             self.num_mlps = len(mlps)
-            self.mlp_ids = [mlp.id for mlp in mlps]
+            self.mlp_ids = np.array([mlp.id for mlp in mlps])
             self.blocks = self._slice_mlps(mlps)
             self.layers = nn.Sequential(*self.blocks)
 
@@ -157,19 +159,43 @@ class BatchMLP(Policy):
     def __len__(self):
         return self.num_mlps
 
+    def _slice_inds(self, inds):
+        '''
+        Slice a copy of this object at the specified inds while avoiding explicit copying of tensors
+        '''
+        for l, layer in enumerate(self.layers):
+            if not isinstance(layer, BatchLinearBlock):
+                continue
+            self.layers[l].weight.data = self.layers[l].weight.data[inds, :, :]
+            self.layers[l].bias.data = self.layers[l].bias.data[inds, :]
+        # slice the action std-devs
+        self.action_log_std.data = self.action_log_std.data[inds, :]
+        # slice the mlp inds
+        self.mlp_ids = self.mlp_ids[inds]
+        self.num_mlps = len(inds)
+        return self
+
+    def _copy(self):
+        return copy.deepcopy(self)
+
     # override getter and setter for BatchMLP slicing
     def __getitem__(self, key):  # TODO: test
         if isinstance(key, slice):
             inds = range(*key.indices(self.num_mlps))
-            mlps = []
-            for ind in inds:
-                mlps.append(self._get_mlp_at_idx(ind))
-            return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
+            obj = self._copy()
+            return obj
+            # mlps = []
+            # for ind in inds:
+            #     mlps.append(self._get_mlp_at_idx(ind))
+            # return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
         if isinstance(key, tuple) or isinstance(key, np.ndarray) or isinstance(key, List):
-            mlps = []
-            for idx in key:
-                mlps.append(self._get_mlp_at_idx(idx))
-            return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
+            obj = self._copy()
+            obj._slice_inds(key)
+            return obj
+            # mlps = []
+            # for idx in key:
+            #     mlps.append(self._get_mlp_at_idx(idx))
+            # return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
         mlp = self._get_mlp_at_idx(key)
         return BatchMLP(self.cfg, self.device, self.model_fn, np.array([mlp]))
 

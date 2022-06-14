@@ -110,14 +110,15 @@ class VariationOperator():
             actor_y_ids = np.repeat(actor_y_ids, repeats=self.cfg.mutations_per_policy)
 
         # remove the keys we will use from the set of all available policy keys
-        for key in set(actor_x_ids):
+        set_actor_x_ids = set(actor_x_ids)
+        for key in set_actor_x_ids:
             self.free_policy_keys.remove(key)
 
         actors_x_evo = self.all_actors[actor_x_ids]
         # actors_x_evo = np.array([copy.deepcopy(policy) for policy in actors_x_evo])  # variation should modify a copy of all the tensors
         actors_y_evo = self.all_actors[actor_y_ids] if actor_y_ids is not None else None
 
-        device = torch.device('cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # evolve NNs on the cpu, keep gpu memory for batch inference in eval workers
         # batch_actors_x = BatchMLP(actors_x_evo, device)
         # batch_actors_y = BatchMLP(actors_y_evo, device) if actors_y_evo is not None else None
         with torch.no_grad():
@@ -136,8 +137,6 @@ class VariationOperator():
         '''
         while not q.empty():
             q.get_many()
-
-
 
     def evo(self, actor_x, actor_y, device, crossover_op=None, mutation_op=None):
         '''
