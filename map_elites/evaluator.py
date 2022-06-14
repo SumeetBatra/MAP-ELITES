@@ -117,7 +117,7 @@ class Evaluator():
         dones = torch.zeros((self.vec_env.env.num_environments,))
         traj_len = self.cfg.episode_length
         # get a batch of trajectories and rewards
-        while not all(dones):
+        for _ in range(traj_len):
             with torch.no_grad():
                 logits = batch_actors(obs).view(-1)
                 acts = batch_actors.get_actions(self.action_space, logits, batch_actors.action_log_std.exp()).view(num_actors, -1) \
@@ -132,8 +132,8 @@ class Evaluator():
                         rews[i] = 0
 
                 ep_lengths = info['ep_lengths']
-                if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
-                    dones = torch.ones_like(dones)
+                # if ep_lengths.__contains__(traj_len):  # only collect fixed number of transitions
+                #     dones = torch.ones_like(dones)
 
         for i in range(self.cfg.num_agents):
             if rews[i] != 0:  # for each agent, if sim ended at T=1000 without triggering the done flag, then there will be one hanging episode that wasn't stored in cumulative-rewards
@@ -155,12 +155,8 @@ class Evaluator():
         agents = []
         actors = batch_actors.mlps  # get list of mlps view of the BatchMLP object
         mutated_actor_keys_repeated = np.repeat(mutated_actor_keys, repeats=self.cfg.mutations_per_policy)  # repeat keys M times b/c actors parents were mutated M times
-        for actor, actor_key, desc, rew in zip(actors, mutated_actor_keys_repeated, bds, mean_rewards):
-            agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
-                               genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
-                               phenotype=desc, fitness=rew)
-            agents.append(agent)
-        return agents, mutated_actor_keys, frames, runtime, avg_ep_length, num_evals
+
+        return (actors, mutated_actor_keys_repeated, bds, mean_rewards), mutated_actor_keys, frames, runtime, avg_ep_length, num_evals
 
     def close_envs(self):
         self.vec_env.close()

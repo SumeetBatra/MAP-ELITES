@@ -2,7 +2,7 @@ import time
 
 from numpy import ndarray
 from map_elites import common as cm
-from map_elites.evaluator import Evaluator
+from map_elites.evaluator import Evaluator, Individual
 from map_elites.variation import VariationOperator
 from utils.signal_slot import EventLoopObject, signal, Timer
 from utils.logger import log
@@ -22,7 +22,7 @@ class Trainer(EventLoopObject):
         self.evaluator: Evaluator = evaluator
 
         self.num_policies = cfg.random_init_batch
-        self.step_size = 64  # number of new policies added to the archive before increasing the number of parallel environments
+        self.step_size = 100  # number of new policies added to the archive before increasing the number of parallel environments
         self.num_envs = cfg.num_agents
         self.init_mode = True
 
@@ -66,19 +66,19 @@ class Trainer(EventLoopObject):
         if mutated_policies is not None:
             eval_res = self.evaluator.evaluate_batch(mutated_policies, mutated_policy_keys)
         # if evaluation was successful, get metadata and map the evaluated policies into the archive
-        (agents, mutated_actor_keys, frames, runtime, avg_ep_length, evals) = eval_res if eval_res is not None else \
-            (None, None, None, None, None)
+        (agents_metadata, mutated_actor_keys, frames, runtime, avg_ep_length, evals) = eval_res if eval_res is not None else \
+            (None, None, None, None, None, None)
 
-        if agents is not None:
-            mutated_policies = mutated_policies.mlps  # list of mlps view of policies
-            metadata = self._map_agents(agents, mutated_actor_keys, mutated_policies)
+        if agents_metadata is not None:
+            # mutated_policies = mutated_policies.mlps  # list of mlps view of policies
+            metadata = self._map_agents(agents_metadata, mutated_actor_keys)
             self.eval_results.emit(self.object_id, metadata, evals, frames, runtime, avg_ep_length)
-            self.mutator.update_eval_queue(agents)
+            self.mutator.update_eval_queue(len(agents_metadata[0]))
         else:  # evaluation was not successful for some reason, release the keys
             mutated_actor_keys = eval_res
             self.mutator.on_release(mutated_actor_keys)
 
-    def _map_agents(self, agents, evaluated_actors_keys, mutated_policies):
+    def _map_agents(self, agents_metadata, evaluated_actors_keys):
         '''
         Map the evaluated agents using their behavior descriptors. Send the metadata back to the main process for logging
         :param behav_descs: behavior descriptors of a batch of evaluated agents
@@ -87,7 +87,11 @@ class Trainer(EventLoopObject):
         start_time = time.time()
         metadata = []
 
-        for policy, agent in zip(mutated_policies, agents):
+        for agent_metadata in zip(*agents_metadata):
+            (actor, actor_key, desc, rew) = agent_metadata
+            agent = Individual(genotype=actor_key, parent_1_id=actor.parent_1_id, parent_2_id=actor.parent_2_id,
+                               genotype_type=actor.type, genotype_novel=actor.novel, genotype_delta_f=actor.delta_f,
+                               phenotype=desc, fitness=rew)
             added = False
             niche_index = self.kdt.query([agent.phenotype], k=1)[1][0][0]  # get the closest voronoi cell to the behavior descriptor
             niche = self.kdt.data[niche_index]
@@ -102,7 +106,7 @@ class Trainer(EventLoopObject):
                     agent.genotype = map_agent_id
                     # override the existing agent in the actors pool @ map_agent_id. This species goes extinct b/c a more fit one was found
                     stored_actor = self.all_actors[map_agent_id].mlps[0]
-                    stored_actor.load_state_dict(policy.state_dict())
+                    stored_actor.load_state_dict(actor.state_dict())
                     self.all_actors[map_agent_id] = stored_actor
                     added = True
             else:
@@ -111,7 +115,7 @@ class Trainer(EventLoopObject):
                 self.elites_map[n] = (agent_id, agent.fitness)
                 agent.genotype = agent_id
                 stored_actor = self.all_actors[agent_id].mlps[0]
-                stored_actor.load_state_dict(policy.state_dict())
+                stored_actor.load_state_dict(actor.state_dict())
                 self.all_actors[agent_id] = stored_actor
                 added = True
 

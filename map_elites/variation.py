@@ -60,11 +60,10 @@ class VariationOperator():
         self.iso_sigma = iso_sigma
         self.line_sigma = line_sigma
 
-    def update_eval_queue(self, agents):
-        num_eval = len(agents)
-        self.queued_for_eval -= num_eval
+    def update_eval_queue(self, num_agents):
+        self.queued_for_eval -= num_agents
         self.queued_for_eval = max(self.queued_for_eval, 0)
-        log.debug(f'Received {len(agents)} processed agents, {self.queued_for_eval=}')
+        log.debug(f'Received {num_agents} processed agents, {self.queued_for_eval=}')
 
     def on_release(self, mapped_actors_keys):
         self.free_policy_keys.extend(list(set(mapped_actors_keys)))

@@ -184,18 +184,10 @@ class BatchMLP(Policy):
             inds = range(*key.indices(self.num_mlps))
             obj = self._copy()
             return obj
-            # mlps = []
-            # for ind in inds:
-            #     mlps.append(self._get_mlp_at_idx(ind))
-            # return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
         if isinstance(key, tuple) or isinstance(key, np.ndarray) or isinstance(key, List):
             obj = self._copy()
             obj._slice_inds(key)
             return obj
-            # mlps = []
-            # for idx in key:
-            #     mlps.append(self._get_mlp_at_idx(idx))
-            # return BatchMLP(self.cfg, self.device, self.model_fn, np.array(mlps))
         mlp = self._get_mlp_at_idx(key)
         return BatchMLP(self.cfg, self.device, self.model_fn, np.array([mlp]))
 

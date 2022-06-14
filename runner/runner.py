@@ -50,7 +50,7 @@ class Runner(EventLoopObject):
 
         self.periodic(self._report_interval, self.report_evals)
         self.periodic(self.cfg.cp_save_period_sec, self.save_checkpoint)
-        self.periodic(30.0, self.maybe_resize_vec_env)
+        self.periodic(15.0, self.maybe_resize_vec_env)
 
     @signal
     def stop(self): pass
@@ -83,7 +83,7 @@ class Runner(EventLoopObject):
         return Timer(self.event_loop, period).timeout.connect(callback)
 
     def on_evaluator_ready(self):
-        self.periodic(3.0, self._maybe_train)  # every 3 seconds, try to run another iteration of each Trainer
+        self.periodic(15.0, self._maybe_train)  # every 3 seconds, try to run another iteration of each Trainer
 
     def on_release(self, mutated_actor_keys):
         '''
