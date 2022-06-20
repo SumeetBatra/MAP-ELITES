@@ -6,7 +6,7 @@
 #SBATCH --output=tmp/map-elites-%j.log
 
 srun python -m train_isaac \
-              --random_init=300 \
+              --random_init=200 \
               --random_init_batch=500 \
               --max_evals=100000000 \
               --mutation_op=gaussian_mutation \

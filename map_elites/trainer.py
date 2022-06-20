@@ -22,7 +22,7 @@ class Trainer(EventLoopObject):
         self.evaluator: Evaluator = evaluator
 
         self.num_policies = cfg.random_init_batch
-        self.step_size = 100  # number of new policies added to the archive before increasing the number of parallel environments
+        self.step_size = 50  # number of new policies added to the archive before increasing the number of parallel environments
         self.num_envs = cfg.num_agents
         self.init_mode = True
 

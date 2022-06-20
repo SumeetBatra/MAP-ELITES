@@ -124,6 +124,11 @@ class VariationOperator():
             actor_z = self.evo(actors_x_evo, actors_y_evo, device, self.crossover_op, self.mutation_op)
             # actors_z = actor_z.mlps # list of mlps view of the BatchMLP object
 
+        actor_z.to(torch.device('cpu'))
+        actors_x_evo.to(torch.device('cpu'))
+        actors_y_evo.to(torch.device('cpu'))
+        torch.cuda.empty_cache()
+
         self.queued_for_eval += len(actor_x_ids)
         evo_e = time.time() - evo_s
         log.debug(f'Variation took {evo_e:.3f} seconds')
